@@ -1,0 +1,639 @@
+// Package console is the bottom pane: a tabbed container with a build tab and
+// real ConPTY shell tabs. Shell I/O stays off the UI goroutine; the emulator
+// keeps each tab's screen state.
+package console
+
+import (
+	"bytes"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+
+	"github.com/aymanbagabas/go-pty"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/x/vt"
+
+	buildpane "github.com/lakshwin/bento/internal/build"
+	"github.com/lakshwin/bento/internal/theme"
+	"github.com/lakshwin/bento/internal/ui"
+	"github.com/lakshwin/bento/internal/winutil"
+)
+
+// ShellStartedMsg announces a ready shell session.
+type ShellStartedMsg struct{ shell *shell }
+
+// ShellOutputMsg carries a chunk of terminal output.
+type ShellOutputMsg struct {
+	ID   int
+	Data []byte
+}
+
+// ShellExitedMsg reports that a shell's output stream closed. Title is kept in
+// the message so the root model can explain an immediate agent exit in the
+// status bar instead of making it look like the launch was ignored.
+type ShellExitedMsg struct {
+	ID    int
+	Title string
+}
+
+// ShellErrMsg reports a failure to start a shell.
+type ShellErrMsg struct{ Err error }
+
+type shell struct {
+	id     int
+	title  string
+	pty    pty.Pty
+	cmd    *pty.Cmd
+	emu    *vt.SafeEmulator
+	ch     chan []byte
+	exited bool
+}
+
+// Model is the tabbed console pane.
+type Model struct {
+	dir   string
+	build *buildpane.Model
+
+	shells []*shell
+	active int // 0 = build, 1..len(shells) = shells
+	nextID int
+
+	width  int
+	height int
+
+	errMsg string
+}
+
+// New creates the console for a project directory.
+func New(dir string) *Model {
+	return &Model{dir: dir, build: buildpane.New(dir)}
+}
+
+// Init implements ui.Pane. Start the default PowerShell tab immediately so
+// the bottom-center pane is a usable Terminal on first paint.
+func (m *Model) Init() tea.Cmd {
+	if len(m.shells) == 0 {
+		return m.newShell()
+	}
+	return nil
+}
+
+// Update implements ui.Pane.
+func (m *Model) Update(msg tea.Msg) (ui.Pane, tea.Cmd) {
+	switch msg := msg.(type) {
+	case ui.PaneSizeMsg:
+		m.width, m.height = msg.Width, msg.Height
+		m.build.Update(ui.PaneSizeMsg{Width: msg.Width, Height: max(1, msg.Height-1)})
+		m.resizeShells()
+		return m, nil
+
+	case ui.ClickMsg:
+		if msg.Y == 0 {
+			m.clickTab(msg.X)
+		}
+		return m, nil
+
+	case tea.KeyMsg:
+		return m, m.handleKey(msg)
+
+	case buildpane.RunStartedMsg, buildpane.RunEventMsg:
+		_, cmd := m.build.Update(msg)
+		return m, cmd
+
+	case ShellStartedMsg:
+		m.errMsg = ""
+		m.shells = append(m.shells, msg.shell)
+		m.active = len(m.shells)
+		m.resizeShells()
+		return m, readCmd(msg.shell)
+
+	case ShellOutputMsg:
+		s := m.find(msg.ID)
+		if s == nil || s.emu == nil {
+			return m, nil
+		}
+		s.emu.Write(msg.Data)
+		return m, readCmd(s)
+
+	case ShellExitedMsg:
+		if s := m.find(msg.ID); s != nil {
+			s.exited = true
+		}
+		return m, nil
+
+	case ShellErrMsg:
+		if msg.Err != nil {
+			m.errMsg = msg.Err.Error()
+		}
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "ctrl+t":
+		return m.newShell()
+	case "alt+]":
+		m.cycle(1)
+		return nil
+	case "alt+[":
+		m.cycle(-1)
+		return nil
+	case "alt+w":
+		if m.active > 0 {
+			m.closeActiveShell()
+		}
+		return nil
+	}
+	if m.active == 0 {
+		_, cmd := m.build.Update(msg)
+		return cmd
+	}
+	s := m.shells[m.active-1]
+	if s.exited {
+		return nil
+	}
+	if data := encodeKey(msg); len(data) > 0 && s.pty != nil {
+		_, _ = s.pty.Write(data)
+	}
+	return nil
+}
+
+func (m *Model) activeShellID() int {
+	if m.active == 0 || m.active > len(m.shells) {
+		return -1
+	}
+	return m.shells[m.active-1].id
+}
+
+func (m *Model) find(id int) *shell {
+	for _, s := range m.shells {
+		if s.id == id {
+			return s
+		}
+	}
+	return nil
+}
+
+func (m *Model) cycle(delta int) {
+	n := 1 + len(m.shells)
+	if n <= 1 {
+		return
+	}
+	m.active = (m.active + delta + n) % n
+}
+
+func (m *Model) closeActiveShell() {
+	if m.active == 0 || m.active > len(m.shells) {
+		return
+	}
+	s := m.shells[m.active-1]
+	closeShell(s)
+	m.shells = append(m.shells[:m.active-1], m.shells[m.active:]...)
+	if m.active > len(m.shells) {
+		m.active = len(m.shells)
+	}
+}
+
+func closeShell(s *shell) {
+	if s == nil {
+		return
+	}
+	if s.cmd != nil && s.cmd.Process != nil {
+		_ = s.cmd.Process.Kill()
+	}
+	if s.pty != nil {
+		_ = s.pty.Close()
+	}
+}
+
+func readCmd(s *shell) tea.Cmd {
+	ch := s.ch
+	id := s.id
+	return func() tea.Msg {
+		data, ok := <-ch
+		if !ok {
+			return ShellExitedMsg{ID: id, Title: s.title}
+		}
+		return ShellOutputMsg{ID: id, Data: data}
+	}
+}
+
+func (m *Model) shellSize() (int, int) {
+	cols := m.width - 2
+	rows := m.height - 3
+	if cols < 20 {
+		cols = 80
+	}
+	if rows < 5 {
+		rows = 24
+	}
+	return cols, rows
+}
+
+func (m *Model) resizeShells() {
+	cols, rows := m.shellSize()
+	for _, s := range m.shells {
+		if s.pty != nil {
+			_ = s.pty.Resize(cols, rows)
+		}
+		if s.emu != nil {
+			s.emu.Resize(cols, rows)
+		}
+	}
+}
+
+func (m *Model) clickTab(x int) {
+	n := 1 + len(m.shells)
+	if n <= 0 || m.width <= 0 {
+		return
+	}
+	cell := m.width / n
+	if cell < 1 {
+		cell = 1
+	}
+	idx := x / cell
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= n {
+		idx = n - 1
+	}
+	m.active = idx
+}
+
+// NewShell opens a new ConPTY tab. The root model calls this for ctrl+t.
+func (m *Model) NewShell() tea.Cmd {
+	return m.newShell()
+}
+
+func (m *Model) newShell() tea.Cmd {
+	m.nextID++
+	id := m.nextID
+	dir := m.dir
+	m.errMsg = ""
+	cols, rows := m.shellSize()
+	return func() tea.Msg {
+		s, err := startShell(id, dir, cols, rows)
+		if err != nil {
+			return ShellErrMsg{Err: err}
+		}
+		return ShellStartedMsg{shell: s}
+	}
+}
+
+func startShell(id int, dir string, cols, rows int) (*shell, error) {
+	name, args := shellCommand()
+	return startSession(id, "Terminal", dir, cols, rows, name, args)
+}
+
+func startSession(id int, title, dir string, cols, rows int, name string, args []string) (*shell, error) {
+	name, args = winutil.WrapPTY(name, args)
+	p, err := pty.New()
+	if err != nil {
+		return nil, err
+	}
+	cmd := p.Command(name, args...)
+	cmd.Dir = dir
+	if strings.EqualFold(title, "OpenCode") {
+		cmd.Env = openCodeEnv()
+	}
+	if err := cmd.Start(); err != nil {
+		_ = p.Close()
+		return nil, err
+	}
+	_ = p.Resize(cols, rows)
+	s := &shell{
+		id:    id,
+		title: title,
+		pty:   p,
+		cmd:   cmd,
+		emu:   vt.NewSafeEmulator(cols, rows),
+		ch:    make(chan []byte, 256),
+	}
+	go s.readLoop(p, cols, rows)
+	go func() { _ = cmd.Wait() }()
+	return s, nil
+}
+
+// openCodeEnv works around a Windows regression in OpenCode's Bun runtime:
+// some versions fail with EEXIST when the normal ~/.config/opencode directory
+// already exists. Keep the user's config file when possible, but give
+// OpenCode a separate config root so it can boot reliably from Bento.
+func openCodeEnv() []string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	original := filepath.Join(home, ".config", "opencode")
+	if _, err := os.Stat(original); err != nil {
+		return nil
+	}
+	base, err := os.UserConfigDir()
+	if err != nil {
+		return nil
+	}
+	isolated := filepath.Join(base, "bento", "opencode-config")
+	if err := os.MkdirAll(isolated, 0o755); err != nil {
+		return nil
+	}
+	env := append([]string(nil), os.Environ()...)
+	env = append(env, "XDG_CONFIG_HOME="+isolated)
+	// OpenCode's TUI uses terminfo and true-color capabilities even inside
+	// ConPTY. Make those capabilities explicit because Bento is not itself a
+	// Windows Terminal tab and may inherit no TERM metadata.
+	env = append(env, "TERM=xterm-256color", "COLORTERM=truecolor")
+	for _, name := range []string{"opencode.json", "opencode.jsonc", "config.json", "config.jsonc"} {
+		candidate := filepath.Join(original, name)
+		if _, err := os.Stat(candidate); err == nil {
+			env = append(env, "OPENCODE_CONFIG="+candidate)
+			break
+		}
+	}
+	return env
+}
+
+// StartCommand opens a new console tab running an external command, used by
+// the agent launcher. The process starts off the UI goroutine.
+func (m *Model) StartCommand(title, path string, args ...string) tea.Cmd {
+	m.nextID++
+	id := m.nextID
+	dir := m.dir
+	cols, rows := m.shellSize()
+	if title == "" {
+		title = "agent"
+	}
+	m.errMsg = ""
+	argv := append([]string(nil), args...)
+	return func() tea.Msg {
+		s, err := startSession(id, title, dir, cols, rows, path, argv)
+		if err != nil {
+			return ShellErrMsg{Err: err}
+		}
+		return ShellStartedMsg{shell: s}
+	}
+}
+
+func shellCommand() (string, []string) {
+	if p, err := exec.LookPath("pwsh.exe"); err == nil {
+		return p, []string{"-NoLogo"}
+	}
+	if p, err := exec.LookPath("powershell.exe"); err == nil {
+		return p, []string{"-NoLogo"}
+	}
+	if p, err := exec.LookPath("cmd.exe"); err == nil {
+		return p, nil
+	}
+	return "cmd.exe", nil
+}
+
+func (s *shell) readLoop(p pty.Pty, cols, rows int) {
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := p.Read(buf)
+		if n > 0 {
+			respondToTerminalQueries(p, buf[:n], cols, rows)
+			chunk := make([]byte, n)
+			copy(chunk, buf[:n])
+			s.ch <- chunk
+		}
+		if err != nil {
+			close(s.ch)
+			return
+		}
+	}
+}
+
+// respondToTerminalQueries answers the small set of terminal capability
+// queries used by full-screen TUIs. A real Windows Terminal answers these
+// while hosting ConPTY; Bento is the host, so it must answer them itself.
+func respondToTerminalQueries(p pty.Pty, data []byte, cols, rows int) {
+	if bytes.Contains(data, []byte("\x1b[14t")) {
+		// CSI 4 ; height ; width t reports text-area pixel dimensions.
+		_, _ = p.Write([]byte("\x1b[4;480;640t"))
+	}
+	if bytes.Contains(data, []byte("\x1b[18t")) {
+		// CSI 8 ; rows ; cols t reports the character-cell dimensions.
+		_, _ = p.Write([]byte("\x1b[8;" + itoa(rows) + ";" + itoa(cols) + "t"))
+	}
+}
+
+// View implements ui.Pane.
+func (m *Model) View(width, height int, focused bool) string {
+	if width <= 0 || height <= 0 {
+		return ""
+	}
+	labels := []string{"Build"}
+	for _, s := range m.shells {
+		label := s.title
+		if s.exited {
+			label += " (exited)"
+		}
+		labels = append(labels, label)
+	}
+	active := m.active
+	if active >= len(labels) {
+		active = len(labels) - 1
+	}
+	tab := ui.TabStrip(width, labels, active)
+	bodyH := height - 1
+	if bodyH < 1 {
+		return tab
+	}
+	var body string
+	if active == 0 && m.errMsg != "" {
+		body = ui.Island("Shell failed", width, bodyH, focused,
+			ui.CenteredCard(max(0, width-2), max(0, bodyH-2), "Could not start process", m.errMsg))
+	} else if active == 0 {
+		body = m.build.View(width, bodyH, focused)
+	} else {
+		body = m.shellView(m.shells[active-1], width, bodyH, focused)
+	}
+	return tab + "\n" + body
+}
+
+func (m *Model) shellView(s *shell, width, height int, focused bool) string {
+	innerW := max(0, width-2)
+	innerH := max(0, height-2)
+	if s == nil || s.emu == nil {
+		return ui.Island("Shell", width, height, focused, ui.CenteredCard(innerW, innerH, "Shell unavailable", m.errMsg))
+	}
+	rendered := s.emu.Render()
+	lines := strings.Split(rendered, "\n")
+	if len(lines) > innerH {
+		lines = lines[:innerH]
+	}
+	for i := range lines {
+		lines[i] = ui.Fit(lines[i], innerW)
+	}
+	for len(lines) < innerH {
+		lines = append(lines, ui.Fit("", innerW))
+	}
+	if !s.exited && !s.emu.CursorHidden() {
+		pos := s.emu.CursorPosition()
+		overlayCursor(lines, pos.X, pos.Y, innerW)
+	}
+	return ui.Island(s.title, width, height, focused, strings.Join(lines, "\n"))
+}
+
+func overlayCursor(lines []string, x, y, width int) {
+	if y < 0 || y >= len(lines) || x < 0 || x >= width {
+		return
+	}
+	left := ansi.Cut(lines[y], 0, x)
+	cell := ansi.Cut(lines[y], x, x+1)
+	right := ansi.Cut(lines[y], x+1, width)
+	if cell == "" {
+		cell = " "
+	}
+	lines[y] = left + theme.CursorStyle().Render(cell) + right
+}
+
+// Title implements ui.Pane.
+func (m *Model) Title() string {
+	if m.active == 0 || m.active > len(m.shells) {
+		return "Build"
+	}
+	return m.shells[m.active-1].title
+}
+
+// KeyHints implements ui.Pane.
+func (m *Model) KeyHints() []ui.KeyHint {
+	hints := make([]ui.KeyHint, 0, 6)
+	if m.active == 0 {
+		hints = append(hints, m.build.KeyHints()...)
+	} else {
+		hints = append(hints,
+			ui.KeyHint{Key: "type", Desc: "send keys"},
+			ui.KeyHint{Key: "alt+w", Desc: "close"},
+		)
+	}
+	hints = append(hints,
+		ui.KeyHint{Key: "ctrl+t", Desc: "new shell"},
+		ui.KeyHint{Key: "alt+[/]", Desc: "tabs"},
+	)
+	return hints
+}
+
+// Close releases every shell. The root model calls this when quitting.
+func (m *Model) Close() {
+	for _, s := range m.shells {
+		closeShell(s)
+	}
+	m.shells = nil
+	m.active = 0
+}
+
+func encodeKey(msg tea.KeyMsg) []byte {
+	switch msg.String() {
+	case "enter":
+		return []byte("\r")
+	case "tab":
+		return []byte("\t")
+	case "shift+tab":
+		return []byte("\x1b[Z")
+	case "backspace":
+		return []byte("\x7f")
+	case "esc":
+		return []byte("\x1b")
+	case " ":
+		return []byte(" ")
+	case "up":
+		return []byte("\x1b[A")
+	case "down":
+		return []byte("\x1b[B")
+	case "right":
+		return []byte("\x1b[C")
+	case "left":
+		return []byte("\x1b[D")
+	case "home":
+		return []byte("\x1b[H")
+	case "end":
+		return []byte("\x1b[F")
+	case "pgup":
+		return []byte("\x1b[5~")
+	case "pgdown":
+		return []byte("\x1b[6~")
+	case "insert":
+		return []byte("\x1b[2~")
+	case "delete":
+		return []byte("\x1b[3~")
+	case "f1":
+		return []byte("\x1bOP")
+	case "f2":
+		return []byte("\x1bOQ")
+	case "f3":
+		return []byte("\x1bOR")
+	case "f4":
+		return []byte("\x1bOS")
+	case "f5":
+		return []byte("\x1b[15~")
+	case "f6":
+		return []byte("\x1b[17~")
+	case "f7":
+		return []byte("\x1b[18~")
+	case "f8":
+		return []byte("\x1b[19~")
+	case "f9":
+		return []byte("\x1b[20~")
+	case "f10":
+		return []byte("\x1b[21~")
+	case "f11":
+		return []byte("\x1b[23~")
+	case "f12":
+		return []byte("\x1b[24~")
+	}
+	t := msg.Type
+	if t >= tea.KeyCtrlA && t <= tea.KeyCtrlZ {
+		return []byte{byte(t-tea.KeyCtrlA) + 1}
+	}
+	switch msg.String() {
+	case "ctrl+@", "ctrl+space":
+		return []byte{0}
+	case "ctrl+\\":
+		return []byte{0x1c}
+	case "ctrl+]":
+		return []byte{0x1d}
+	case "ctrl+^":
+		return []byte{0x1e}
+	case "ctrl+_":
+		return []byte{0x1f}
+	}
+	if t == tea.KeyRunes {
+		if msg.Alt {
+			return append([]byte{0x1b}, []byte(string(msg.Runes))...)
+		}
+		return []byte(string(msg.Runes))
+	}
+	if t == tea.KeySpace {
+		if msg.Alt {
+			return []byte{0x1b, ' '}
+		}
+		return []byte{' '}
+	}
+	return nil
+}
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var b [8]byte
+	i := len(b)
+	for n > 0 {
+		i--
+		b[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(b[i:])
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
