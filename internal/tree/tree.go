@@ -354,19 +354,12 @@ func (m *Model) innerHeight() int {
 	if m.height < 2 {
 		return 0
 	}
-	return m.height - 2
+	return max(0, m.height-ui.ChromeRows)
 }
 
 // View implements ui.Pane.
 func (m *Model) View(width, height int, focused bool) string {
-	innerW := width - 2
-	innerH := height - 2
-	if innerW < 0 {
-		innerW = 0
-	}
-	if innerH < 0 {
-		innerH = 0
-	}
+	innerW, innerH := ui.BodySize(width, height)
 	lines := make([]string, 0, innerH)
 
 	if m.errMsg != "" {
@@ -396,7 +389,7 @@ func (m *Model) View(width, height int, focused bool) string {
 	if len(lines) > innerH {
 		lines = lines[:innerH]
 	}
-	return ui.Island("Tree", width, height, focused, strings.Join(lines, "\n"))
+	return ui.Panel(ui.Spec(m.Title(), m.KeyHints()), width, height, focused, strings.Join(lines, "\n"))
 }
 
 func (m *Model) rowLine(r row, width int, selected bool) string {
@@ -417,7 +410,7 @@ func (m *Model) rowLine(r row, width int, selected bool) string {
 	base := indent + glyph + " "
 	if selected {
 		plain := base + n.name + status
-		return theme.SelectedStyle().Render(ui.Fit(plain, width))
+		return theme.SelectedRowStyle(true).Render(ui.Fit(plain, width))
 	}
 	out := base
 	if n.dir {

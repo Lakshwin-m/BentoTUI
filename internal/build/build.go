@@ -305,7 +305,7 @@ func (m *Model) appendLine(s string) {
 }
 
 func (m *Model) bodyHeight() int {
-	h := m.height - 2 - 1
+	h := m.height - ui.ChromeRows - 1
 	if h < 1 {
 		return 1
 	}
@@ -331,8 +331,7 @@ func (m *Model) clampOffset() {
 
 // View implements ui.Pane.
 func (m *Model) View(width, height int, focused bool) string {
-	innerW := max(0, width-2)
-	innerH := max(0, height-2)
+	innerW, innerH := ui.BodySize(width, height)
 
 	var header string
 	if len(m.tasks) == 0 {
@@ -380,7 +379,7 @@ func (m *Model) View(width, height int, focused bool) string {
 	}
 
 	content := ui.Fit(header, innerW) + "\n" + body
-	return ui.Island(m.Title(), width, height, focused, content)
+	return ui.Panel(ui.Spec(m.Title(), m.KeyHints()), width, height, focused, content)
 }
 
 func (m *Model) styleOutput(line string) string {

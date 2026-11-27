@@ -953,33 +953,14 @@ func (m *Model) gridView() string {
 	content := ui.Compose(m.width, contentH, items)
 
 	if grid.Mode == layout.Narrow {
-		labels := make([]string, 0, len(grid.Visible))
-		active := 0
-		for i, id := range grid.Visible {
-			label := id.String()
-			if p := m.panes[id]; p != nil {
-				label = p.Title()
-			}
-			labels = append(labels, strconv.Itoa(int(id)+1)+" "+label)
-			if id == m.focused {
-				active = i
-			}
-		}
-		line := ui.TabStrip(m.width, labels, active)
-		rows := strings.Split(content, "\n")
-		if len(rows) > 0 {
-			rows[0] = line
-		}
-		content = strings.Join(rows, "\n")
+		// Each pane now owns its title row. Keeping a second global strip here
+		// would reintroduce the duplicate chrome the panel restyle removed.
 	}
 	return content
 }
 
 func (m *Model) statusHints() string {
-	var hints []ui.KeyHint
-	if p := m.panes[m.focused]; p != nil {
-		hints = append(hints, p.KeyHints()...)
-	}
+	var hints []ui.KeyHint // per-pane hints now live in each pane's footer
 	hints = append(hints, ui.KeyHint{Key: "tab", Desc: "focus"}, ui.KeyHint{Key: "ctrl+k", Desc: "commands"}, ui.KeyHint{Key: "?", Desc: "help"})
 	if m.zoomed {
 		hints = append(hints, ui.KeyHint{Key: "alt+z", Desc: "unzoom"})
@@ -1029,8 +1010,13 @@ func (m *Model) helpView() string {
 		}
 	}
 	block := lipgloss.NewStyle().Width(blockW).Align(lipgloss.Left).Render(b.String())
-	body := lipgloss.Place(m.width-2, m.height-3, lipgloss.Center, lipgloss.Center, block)
-	panel := ui.Island("Help", m.width, m.height-1, true, body)
+	panelH := m.height - 1
+	innerW, innerH := ui.BodySize(m.width, panelH)
+	body := lipgloss.Place(innerW, innerH, lipgloss.Center, lipgloss.Center, block)
+	panel := ui.Panel(ui.PanelSpec{
+		Tabs:  []ui.Tab{{Label: "Keyboard reference", Active: true}},
+		Hints: []ui.KeyHint{{Key: "esc", Desc: "close"}},
+	}, m.width, panelH, true, body)
 	status := ui.StatusBar(m.width, ui.StatusData{
 		Project: projectName(m.Dir),
 		Hints:   ui.HintLine([]ui.KeyHint{{Key: "esc", Desc: "close"}}),

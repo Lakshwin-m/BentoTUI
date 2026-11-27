@@ -20,8 +20,9 @@ func (p *MessagePane) Init() tea.Cmd { return nil }
 func (p *MessagePane) Update(msg tea.Msg) (Pane, tea.Cmd) { return p, nil }
 
 func (p *MessagePane) View(width, height int, focused bool) string {
-	body := CenteredCard(width-2, height-2, p.PaneTitle, p.Body)
-	return Island(p.PaneTitle, width, height, focused, body)
+	iw, ih := BodySize(width, height)
+	body := CenteredCard(iw, ih, p.PaneTitle, p.Body)
+	return Panel(Spec(p.PaneTitle, p.KeyHints()), width, height, focused, body)
 }
 
 func (p *MessagePane) Title() string { return p.PaneTitle }

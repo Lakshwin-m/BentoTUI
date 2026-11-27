@@ -106,7 +106,7 @@ func (m *Model) Update(msg tea.Msg) (ui.Pane, tea.Cmd) {
 		return m, nil
 
 	case ui.ClickMsg:
-		if msg.Y == 0 {
+		if msg.Y == 1 {
 			m.clickTab(msg.X)
 		}
 		return m, nil
@@ -237,7 +237,7 @@ func readCmd(modelID int, s *shell) tea.Cmd {
 
 func (m *Model) shellSize() (int, int) {
 	cols := m.width - 2
-	rows := m.height - 3
+	rows := m.height - ui.ChromeRows
 	if cols < 20 {
 		cols = 80
 	}
@@ -462,30 +462,32 @@ func (m *Model) View(width, height int, focused bool) string {
 	if active >= len(labels) {
 		active = len(labels) - 1
 	}
-	tab := ui.TabStrip(width, labels, active)
-	bodyH := height - 1
-	if bodyH < 1 {
-		return tab
+	tabs := make([]ui.Tab, 0, len(labels))
+	for i, l := range labels {
+		tabs = append(tabs, ui.Tab{Label: l, Active: i == active})
 	}
+	spec := ui.PanelSpec{Tabs: tabs, Hints: m.KeyHints()}
+	if m.paneTitle != "" {
+		spec.Right = theme.MutedStyle().Render(m.paneTitle)
+	}
+
+	innerW, innerH := ui.BodySize(width, height)
 	var body string
 	switch {
 	case len(m.shells) == 0 && m.errMsg != "":
-		body = ui.Island("Shell failed", width, bodyH, focused,
-			ui.CenteredCard(max(0, width-2), max(0, bodyH-2), "Could not start process", m.errMsg))
+		body = ui.CenteredCard(innerW, innerH, "Could not start process", m.errMsg)
 	case len(m.shells) == 0:
-		body = ui.Island(m.displayTitle(), width, bodyH, focused,
-			ui.CenteredCard(max(0, width-2), max(0, bodyH-2), "Starting shell", "The PowerShell session is warming up."))
+		body = ui.CenteredCard(innerW, innerH, "Starting shell", "The PowerShell session is warming up.")
 	default:
-		body = m.shellView(m.shells[active], width, bodyH, focused)
+		body = m.shellBody(m.shells[active], innerW, innerH)
 	}
-	return tab + "\n" + body
+	return ui.Panel(spec, width, height, focused, body)
 }
 
-func (m *Model) shellView(s *shell, width, height int, focused bool) string {
-	innerW := max(0, width-2)
-	innerH := max(0, height-2)
+// shellBody renders one shell's terminal grid into an innerW x innerH body.
+func (m *Model) shellBody(s *shell, innerW, innerH int) string {
 	if s == nil || s.emu == nil {
-		return ui.Island("Shell", width, height, focused, ui.CenteredCard(innerW, innerH, "Shell unavailable", m.errMsg))
+		return ui.CenteredCard(innerW, innerH, "Shell unavailable", m.errMsg)
 	}
 	rendered := s.emu.Render()
 	lines := strings.Split(rendered, "\n")
@@ -502,11 +504,7 @@ func (m *Model) shellView(s *shell, width, height int, focused bool) string {
 		pos := s.emu.CursorPosition()
 		overlayCursor(lines, pos.X, pos.Y, innerW)
 	}
-	title := m.paneTitle
-	if title == "" {
-		title = s.title
-	}
-	return ui.Island(title, width, height, focused, strings.Join(lines, "\n"))
+	return strings.Join(lines, "\n")
 }
 
 func (m *Model) displayTitle() string {

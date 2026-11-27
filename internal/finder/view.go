@@ -12,10 +12,10 @@ import (
 
 // View renders the overlay island at exactly width x height cells.
 func (m *Model) View(width, height int) string {
-	innerW := max(0, width-2)
-	innerH := max(0, height-2)
+	innerW, innerH := ui.BodySize(width, height)
+	hints := []ui.KeyHint{{Key: "enter", Desc: "open"}, {Key: "esc", Desc: "cancel"}}
 	if innerW == 0 || innerH < 2 {
-		return ui.Island("Find file", width, height, true, "")
+		return ui.Panel(ui.PanelSpec{Tabs: []ui.Tab{{Label: "Find file", Active: true}}, Hints: hints}, width, height, true, "")
 	}
 
 	var status string
@@ -33,7 +33,7 @@ func (m *Model) View(width, height int) string {
 	}
 	input += "  " + theme.InputMutedStyle().Render(status)
 
-	listH := innerH - 2
+	listH := innerH - 1
 	if listH < 0 {
 		listH = 0
 	}
@@ -62,17 +62,13 @@ func (m *Model) View(width, height int) string {
 	lines := make([]string, 0, innerH)
 	lines = append(lines, theme.InputStyle().Render(ui.PaintBackground(ui.Fit(input, innerW), theme.P.Surface)))
 	lines = append(lines, rows...)
-	lines = append(lines, ui.Fit(ui.HintLine([]ui.KeyHint{
-		{Key: "enter", Desc: "open"},
-		{Key: "esc", Desc: "cancel"},
-	}), innerW))
 	for len(lines) < innerH {
 		lines = append(lines, ui.Fit("", innerW))
 	}
 	if len(lines) > innerH {
 		lines = lines[:innerH]
 	}
-	return ui.Island("Find file", width, height, true, strings.Join(lines, "\n"))
+	return ui.Panel(ui.PanelSpec{Tabs: []ui.Tab{{Label: "Find file", Active: true}}, Hints: hints}, width, height, true, strings.Join(lines, "\n"))
 }
 
 func (m *Model) row(i, width int) string {

@@ -152,7 +152,7 @@ func (m *Model) activate() tea.Cmd {
 }
 
 func (m *Model) clamp() {
-	innerH := max(0, m.height-2)
+	innerH := max(0, m.height-ui.ChromeRows)
 	rows := innerH / agentRowH
 	if rows < 1 {
 		rows = 1
@@ -176,11 +176,11 @@ func (m *Model) clamp() {
 
 // View implements ui.Pane.
 func (m *Model) View(width, height int, focused bool) string {
-	innerW := max(0, width-2)
-	innerH := max(0, height-2)
+	innerW, innerH := ui.BodySize(width, height)
+	spec := ui.Spec(m.Title(), m.KeyHints())
 	if len(m.agents) == 0 {
 		body := ui.CenteredCard(innerW, innerH, "No agents in catalog", "")
-		return ui.Island("Agents", width, height, focused, body)
+		return ui.Panel(spec, width, height, focused, body)
 	}
 	lines := make([]string, 0, innerH)
 	end := m.scroll + (innerH+agentRowH-1)/agentRowH
@@ -219,7 +219,7 @@ func (m *Model) View(width, height int, focused bool) string {
 	if len(lines) > innerH {
 		lines = lines[:innerH]
 	}
-	return ui.Island("Agents", width, height, focused, strings.Join(lines, "\n"))
+	return ui.Panel(spec, width, height, focused, strings.Join(lines, "\n"))
 }
 
 // Title implements ui.Pane.

@@ -264,7 +264,7 @@ func (m *Model) innerHeight() int {
 	if m.height < 2 {
 		return 0
 	}
-	return m.height - 2
+	return max(0, m.height-ui.ChromeRows)
 }
 
 func (m *Model) clamp() {
@@ -326,14 +326,7 @@ func (m *Model) clamp() {
 
 // View implements ui.Pane.
 func (m *Model) View(width, height int, focused bool) string {
-	innerW := width - 2
-	innerH := height - 2
-	if innerW < 0 {
-		innerW = 0
-	}
-	if innerH < 0 {
-		innerH = 0
-	}
+	innerW, innerH := ui.BodySize(width, height)
 
 	var body string
 	switch {
@@ -359,7 +352,7 @@ func (m *Model) View(width, height int, focused bool) string {
 			body = ui.Fit(m.searchPrompt(innerW), innerW) + "\n" + body
 		}
 	}
-	return ui.Island(m.Title(), width, height, focused, body)
+	return ui.Panel(ui.Spec(m.Title(), m.KeyHints()), width, height, focused, body)
 }
 
 func (m *Model) renderLines(innerW, innerH int, focused bool) string {

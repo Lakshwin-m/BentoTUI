@@ -217,7 +217,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 }
 
 func (m *Model) rowsHeight() int {
-	h := m.height - 2 - 2 // borders + branch header + spacer
+	h := m.height - ui.ChromeRows - 2 // chrome + branch header + spacer
 	if h < 1 {
 		return 1
 	}
@@ -252,8 +252,7 @@ func (m *Model) clamp() {
 
 // View implements ui.Pane.
 func (m *Model) View(width, height int, focused bool) string {
-	innerW := max(0, width-2)
-	innerH := max(0, height-2)
+	innerW, innerH := ui.BodySize(width, height)
 
 	var body string
 	switch {
@@ -285,7 +284,7 @@ func (m *Model) View(width, height int, focused bool) string {
 		}
 		body = b.String()
 	}
-	return ui.Island(m.Title(), width, height, focused, body)
+	return ui.Panel(ui.Spec(m.Title(), m.KeyHints()), width, height, focused, body)
 }
 
 func (m *Model) headerLine(width int) string {
@@ -323,7 +322,7 @@ func (m *Model) entryLine(i, width int, focused bool) string {
 	var text string
 	switch {
 	case i == m.cursor && focused:
-		text = code + " " + theme.SelectedStyle().Render(shown)
+		text = code + " " + theme.SelectedRowStyle(true).Render(shown)
 	case e.Index == '?' && e.Worktree == '?':
 		text = code + " " + theme.MutedStyle().Render(shown)
 	default:

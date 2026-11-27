@@ -30,6 +30,7 @@ type Palette struct {
 	Untracked     lipgloss.Color
 	Conflicted    lipgloss.Color
 	Selection     lipgloss.Color
+	SelectionDim  lipgloss.Color
 	Match         lipgloss.Color
 	MatchCurrent  lipgloss.Color
 	Gutter        lipgloss.Color
@@ -45,41 +46,42 @@ type Palette struct {
 	Warning       lipgloss.Color
 }
 
-// Dark is Bento's default "Harbor" palette: deep blue-black surfaces, a teal
-// accent, and warm amber highlights. Roles are shared by pane chrome, git
-// state, search matches, and Chroma syntax highlighting.
+// Dark is the "Lagoon" palette: an ocean-teal night scene. Three teal surfaces
+// (Background < Panel < Surface), sand text, one bright cyan for focus, coral
+// for bad/dirty and palm green for good/running.
 var Dark = Palette{
-	Background:    lipgloss.Color("#0B0E14"),
-	Panel:         lipgloss.Color("#121722"),
-	Surface:       lipgloss.Color("#1C2433"),
-	Border:        lipgloss.Color("#33405A"),
-	BorderSubtle:  lipgloss.Color("#1E2738"),
-	BorderFocused: lipgloss.Color("#5EEAD4"),
-	Title:         lipgloss.Color("#8494AD"),
-	TitleFocused:  lipgloss.Color("#E6EDF7"),
-	Text:          lipgloss.Color("#D6DEEB"),
-	TextMuted:     lipgloss.Color("#7C8AA5"),
-	Accent:        lipgloss.Color("#5EEAD4"),
-	AccentAlt:     lipgloss.Color("#F0B072"),
-	Added:         lipgloss.Color("#7FD88F"),
-	Removed:       lipgloss.Color("#F07178"),
-	Modified:      lipgloss.Color("#E6C07B"),
-	Untracked:     lipgloss.Color("#56B6C2"),
-	Conflicted:    lipgloss.Color("#C792EA"),
-	Selection:     lipgloss.Color("#223247"),
-	Match:         lipgloss.Color("#33475E"),
-	MatchCurrent:  lipgloss.Color("#F0B072"),
-	Gutter:        lipgloss.Color("#5A6779"),
-	CurrentLine:   lipgloss.Color("#182130"),
-	StatusBarBg:   lipgloss.Color("#121722"),
-	StatusBarFg:   lipgloss.Color("#D6DEEB"),
-	ModeBg:        lipgloss.Color("#5EEAD4"),
-	ModeFg:        lipgloss.Color("#0B0E14"),
-	OverlayBg:     lipgloss.Color("#182130"),
-	OverlayBorder: lipgloss.Color("#5EEAD4"),
-	Error:         lipgloss.Color("#F07178"),
-	Success:       lipgloss.Color("#7FD88F"),
-	Warning:       lipgloss.Color("#F0B072"),
+	Background:    lipgloss.Color("#071E26"), // ocean: page and gaps
+	Panel:         lipgloss.Color("#0C2832"), // pane fill
+	Surface:       lipgloss.Color("#14343C"), // raised: keycaps, inputs
+	Border:        lipgloss.Color("#24555C"),
+	BorderSubtle:  lipgloss.Color("#24555C"),
+	BorderFocused: lipgloss.Color("#3DDECE"),
+	Title:         lipgloss.Color("#B7A88A"),
+	TitleFocused:  lipgloss.Color("#F4E4C4"),
+	Text:          lipgloss.Color("#F4E4C4"), // sand
+	TextMuted:     lipgloss.Color("#B7A88A"), // sand-dim
+	Accent:        lipgloss.Color("#3DDECE"), // lagoon-bright
+	AccentAlt:     lipgloss.Color("#E9C46A"), // sun
+	Added:         lipgloss.Color("#7DCE82"), // palm
+	Removed:       lipgloss.Color("#FF6F61"), // coral
+	Modified:      lipgloss.Color("#E9C46A"), // sun
+	Untracked:     lipgloss.Color("#5FB3C4"), // reef
+	Conflicted:    lipgloss.Color("#F4A261"), // amber
+	Selection:     lipgloss.Color("#1B5E5A"), // selected row, focused pane
+	SelectionDim:  lipgloss.Color("#14343C"), // selected row, unfocused pane
+	Match:         lipgloss.Color("#1F8F86"),
+	MatchCurrent:  lipgloss.Color("#E9C46A"),
+	Gutter:        lipgloss.Color("#5F7D7B"), // moss
+	CurrentLine:   lipgloss.Color("#14343C"),
+	StatusBarBg:   lipgloss.Color("#04161C"),
+	StatusBarFg:   lipgloss.Color("#F4E4C4"),
+	ModeBg:        lipgloss.Color("#3DDECE"),
+	ModeFg:        lipgloss.Color("#071E26"),
+	OverlayBg:     lipgloss.Color("#0C2832"),
+	OverlayBorder: lipgloss.Color("#3DDECE"),
+	Error:         lipgloss.Color("#FF6F61"),
+	Success:       lipgloss.Color("#7DCE82"),
+	Warning:       lipgloss.Color("#E9C46A"),
 }
 
 // P is the active palette. Restyling should only require changing this value.
@@ -94,12 +96,12 @@ func BorderStyle(focused bool) lipgloss.Style {
 	if focused {
 		c = P.BorderFocused
 	}
-	return lipgloss.NewStyle().Foreground(c).Background(P.Background)
+	return lipgloss.NewStyle().Foreground(c).Background(P.Panel)
 }
 
 // TitleStyle returns the style for a pane title.
 func TitleStyle(focused bool) lipgloss.Style {
-	s := lipgloss.NewStyle().Foreground(P.Title).Background(P.Background)
+	s := lipgloss.NewStyle().Foreground(P.Title).Background(P.Panel)
 	if focused {
 		s = s.Foreground(P.Accent).Bold(true)
 	}
@@ -334,4 +336,48 @@ func GitStatusColor(letter byte) lipgloss.Color {
 	default:
 		return P.TextMuted
 	}
+}
+
+// TabChipStyle renders a title-row tab. The active tab is a lighter chip; it
+// brightens when its pane has focus.
+func TabChipStyle(active, focused bool) lipgloss.Style {
+	switch {
+	case active && focused:
+		return lipgloss.NewStyle().Background(P.Selection).Foreground(P.Accent).Bold(true)
+	case active:
+		return lipgloss.NewStyle().Background(P.Selection).Foreground(P.Text)
+	}
+	return lipgloss.NewStyle().Background(P.SelectionDim).Foreground(P.TextMuted)
+}
+
+// FooterKeyStyle is the key in a pane footer hint; cyan when focused.
+func FooterKeyStyle(focused bool) lipgloss.Style {
+	fg := P.Text
+	if focused {
+		fg = P.Accent
+	}
+	return lipgloss.NewStyle().Background(P.Panel).Foreground(fg)
+}
+
+// FooterLabelStyle is the label in a pane footer hint.
+func FooterLabelStyle(focused bool) lipgloss.Style {
+	fg := P.Gutter
+	if focused {
+		fg = P.Text
+	}
+	return lipgloss.NewStyle().Background(P.Panel).Foreground(fg)
+}
+
+// FooterSepStyle is the " · " between footer hints.
+func FooterSepStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(P.Panel).Foreground(P.Gutter)
+}
+
+// SelectedRowStyle is the selected-row fill: bright when the pane is focused.
+func SelectedRowStyle(focused bool) lipgloss.Style {
+	bg := P.SelectionDim
+	if focused {
+		bg = P.Selection
+	}
+	return lipgloss.NewStyle().Background(bg).Foreground(P.TitleFocused).Bold(focused)
 }
