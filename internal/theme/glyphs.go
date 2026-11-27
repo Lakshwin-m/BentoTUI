@@ -28,4 +28,7 @@ const (
 	// Separators used in the status bar and lists.
 	Sep = " \u00b7 " // " · "
 	Bar = "\u2502"   // │
+
+	// AccentBar marks the active row in a list.
+	AccentBar = "\u258e" // ▎
 )

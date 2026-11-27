@@ -16,13 +16,13 @@ func TabStrip(width int, labels []string, active int) string {
 	b.WriteString(" ")
 	for i, label := range labels {
 		if i > 0 {
-			b.WriteString(theme.MutedStyle().Render(" " + theme.Bar + " "))
+			b.WriteString(theme.TabDividerStyle().Render(" " + theme.Bar + " "))
 		}
 		if i == active {
-			b.WriteString(theme.ModeStyle().Render(" " + label + " "))
+			b.WriteString(theme.TabActiveStyle().Render(" " + label + " "))
 		} else {
-			b.WriteString(theme.MutedStyle().Render(" " + label + " "))
+			b.WriteString(theme.TabInactiveStyle().Render(" " + label + " "))
 		}
 	}
-	return Fit(b.String(), width)
+	return PaintBackground(Fit(b.String(), width), theme.P.Background)
 }

@@ -79,11 +79,11 @@ func ModeFor(w, h int) Mode {
 
 // VisiblePanes returns the panes reachable in this state, in cycle order.
 func VisiblePanes(st State) []ui.PaneID {
-	out := make([]ui.PaneID, 0, 5)
+	out := make([]ui.PaneID, 0, 6)
 	if st.ShowTree {
 		out = append(out, ui.PaneTree)
 	}
-	out = append(out, ui.PaneViewer, ui.PaneTerminal, ui.PaneChanges)
+	out = append(out, ui.PaneViewer, ui.PaneTerminal, ui.PaneTerminal2, ui.PaneChanges)
 	if st.ShowAgent {
 		out = append(out, ui.PaneAgent)
 	}
@@ -117,8 +117,9 @@ func Compute(w, h int, st State) map[ui.PaneID]Rect {
 
 func solveWide(w, h int, st State, g *Grid) {
 	// Wide layout mirrors the reference workspace: viewer and agent across the
-	// top, files and changes stacked on the right, and the terminal below the
-	// agent. The agent pane is intentionally large enough for a full-screen TUI.
+	// top, files and changes stacked on the right, and two shells filling the
+	// full-width bottom row. The agent pane is intentionally large enough for a
+	// full-screen TUI.
 	rightW := clamp(w/5, 26, 34)
 	leftW := clamp(w*2/5, 38, 58)
 	centerW := w - leftW - rightW - 2
@@ -128,15 +129,15 @@ func solveWide(w, h int, st State, g *Grid) {
 	bottomH := clamp(h/4, 8, h-10)
 	topH := h - bottomH - 1
 
-	g.Rects[ui.PaneViewer] = Rect{X: 0, Y: 0, W: leftW, H: topH}
-	g.Rects[ui.PaneBuild] = Rect{X: 0, Y: topH + 1, W: leftW, H: bottomH}
+	viewerW := leftW
+	if !st.ShowAgent {
+		viewerW = leftW + 1 + centerW
+	}
+	g.Rects[ui.PaneViewer] = Rect{X: 0, Y: 0, W: viewerW, H: topH}
 	centerX := leftW + 1
 	if st.ShowAgent {
 		g.Rects[ui.PaneAgent] = Rect{X: centerX, Y: 0, W: centerW, H: topH}
-	} else {
-		g.Rects[ui.PaneTerminal] = Rect{X: centerX, Y: 0, W: centerW, H: topH}
 	}
-	g.Rects[ui.PaneTerminal] = Rect{X: centerX, Y: topH + 1, W: centerW, H: bottomH}
 
 	rightX := centerX + centerW + 1
 	if st.ShowTree {
@@ -144,8 +145,12 @@ func solveWide(w, h int, st State, g *Grid) {
 		g.Rects[ui.PaneTree] = Rect{X: rightX, Y: 0, W: rightW, H: treeH}
 		g.Rects[ui.PaneChanges] = Rect{X: rightX, Y: treeH + 1, W: rightW, H: topH - treeH - 1}
 	} else {
-		g.Rects[ui.PaneChanges] = Rect{X: rightX, Y: 0, W: rightW, H: h}
+		g.Rects[ui.PaneChanges] = Rect{X: rightX, Y: 0, W: rightW, H: topH}
 	}
+
+	leftTermW := (w - 1) / 2
+	g.Rects[ui.PaneTerminal] = Rect{X: 0, Y: topH + 1, W: leftTermW, H: bottomH}
+	g.Rects[ui.PaneTerminal2] = Rect{X: leftTermW + 1, Y: topH + 1, W: w - leftTermW - 1, H: bottomH}
 }
 
 func solveMedium(w, h int, st State, g *Grid) {
@@ -160,7 +165,10 @@ func solveMedium(w, h int, st State, g *Grid) {
 	midW := w - midX
 	previewH := clamp(h*3/5, 8, h-7)
 	g.Rects[ui.PaneViewer] = Rect{X: midX, Y: 0, W: midW, H: previewH}
-	g.Rects[ui.PaneTerminal] = Rect{X: midX, Y: previewH + 1, W: midW, H: h - previewH - 1}
+	bottomH := h - previewH - 1
+	leftTermW := (midW - 1) / 2
+	g.Rects[ui.PaneTerminal] = Rect{X: midX, Y: previewH + 1, W: leftTermW, H: bottomH}
+	g.Rects[ui.PaneTerminal2] = Rect{X: midX + leftTermW + 1, Y: previewH + 1, W: midW - leftTermW - 1, H: bottomH}
 	// Changes is reachable as a tab in the bottom zone, so it has no rect.
 }
 

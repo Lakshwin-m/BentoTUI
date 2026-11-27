@@ -7,16 +7,17 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/lakshwin/bento/internal/agents"
-	buildpane "github.com/lakshwin/bento/internal/build"
 	"github.com/lakshwin/bento/internal/console"
 	"github.com/lakshwin/bento/internal/finder"
 	gitpane "github.com/lakshwin/bento/internal/git"
 	"github.com/lakshwin/bento/internal/layout"
+	"github.com/lakshwin/bento/internal/palette"
 	"github.com/lakshwin/bento/internal/theme"
 	"github.com/lakshwin/bento/internal/tree"
 	"github.com/lakshwin/bento/internal/ui"
@@ -41,14 +42,17 @@ type Model struct {
 	tree         *tree.Model
 	viewer       *viewer.Model
 	finder       *finder.Model
+	palette      *palette.Model
 	changes      *gitpane.Model
 	console      *console.Model
+	console2     *console.Model
 	agents       *agents.Model
-	build        *buildpane.Model
 	agentConsole *console.Model
 	agentRunning bool
 
-	finderOpen bool
+	finderOpen  bool
+	paletteOpen bool
+	zoomed      bool
 
 	showTree  bool
 	showAgent bool
@@ -63,9 +67,17 @@ type Model struct {
 
 	message      string
 	messageError bool
+	messageAt    time.Time
 	mode         string
 
 	startup tea.Cmd
+}
+
+// toastTickMsg drives automatic dismissal of informational status messages.
+type toastTickMsg struct{}
+
+func toastTick() tea.Cmd {
+	return tea.Tick(2*time.Second, func(time.Time) tea.Msg { return toastTickMsg{} })
 }
 
 // Snapshot is the slice of session state persisted between launches.
@@ -84,10 +96,12 @@ func New(dir, version string) *Model {
 	t := tree.New(dir)
 	v := viewer.New()
 	f := finder.New(dir)
+	pal := palette.New()
 	ch := gitpane.New(dir)
 	con := console.New(dir)
+	con2 := console.New(dir)
+	con2.SetTitle("Terminal 2")
 	ag := agents.New()
-	bld := buildpane.New(dir)
 	m := &Model{
 		Dir:       dir,
 		Version:   version,
@@ -95,10 +109,11 @@ func New(dir, version string) *Model {
 		tree:      t,
 		viewer:    v,
 		finder:    f,
+		palette:   pal,
 		changes:   ch,
 		console:   con,
+		console2:  con2,
 		agents:    ag,
-		build:     bld,
 		showTree:  true,
 		showAgent: true,
 		focused:   ui.PaneViewer,
@@ -107,9 +122,9 @@ func New(dir, version string) *Model {
 	m.panes[ui.PaneTree] = t
 	m.panes[ui.PaneViewer] = v
 	m.panes[ui.PaneTerminal] = con
+	m.panes[ui.PaneTerminal2] = con2
 	m.panes[ui.PaneChanges] = ch
 	m.panes[ui.PaneAgent] = ag
-	m.panes[ui.PaneBuild] = bld
 	return m
 }
 
@@ -160,9 +175,7 @@ func (m *Model) Init() tea.Cmd {
 			cmds = append(cmds, cmd)
 		}
 	}
-	if len(cmds) == 0 {
-		return nil
-	}
+	cmds = append(cmds, toastTick())
 	return tea.Batch(cmds...)
 }
 
@@ -177,14 +190,28 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			w, h := m.finderBox()
 			finderCmd = m.finder.Update(ui.PaneSizeMsg{Width: w, Height: h})
 		}
-		return m, tea.Batch(finderCmd, m.resizePanes())
+		var paletteCmd tea.Cmd
+		if m.paletteOpen {
+			w, h := m.paletteBox()
+			paletteCmd = m.palette.Update(ui.PaneSizeMsg{Width: w, Height: h})
+		}
+		return m, tea.Batch(finderCmd, paletteCmd, m.resizePanes())
+
+	case toastTickMsg:
+		if m.message != "" && !m.messageError && m.confirm == "" && time.Since(m.messageAt) >= 4*time.Second {
+			m.message = ""
+		}
+		return m, toastTick()
+
+	case palette.RunMsg:
+		m.paletteOpen = false
+		return m, m.runPaletteCommand(msg.ID)
 
 	case tea.MouseMsg:
 		return m, m.handleMouse(msg)
 
 	case tree.DirLoadedMsg, viewer.FileLoadedMsg, finder.IndexedMsg,
 		viewer.SavedMsg, viewer.HighlightedMsg, gitpane.LoadedMsg,
-		buildpane.RunStartedMsg, buildpane.RunEventMsg,
 		console.ShellStartedMsg, console.ShellOutputMsg,
 		console.ShellExitedMsg, console.ShellErrMsg:
 		return m, m.routeToPane(msg)
@@ -227,7 +254,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.pendingCmd = ""
 				if action == "quit" {
 					m.quitting = true
-					m.console.Close()
+					m.closeConsoles()
 					return m, tea.Quit
 				}
 				if action == "install" {
@@ -250,6 +277,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.showHelp = false
 			}
 			return m, nil
+		}
+		if m.paletteOpen {
+			switch msg.String() {
+			case "ctrl+q", "ctrl+c":
+				m.quitting = true
+				return m, tea.Quit
+			}
+			cmd := m.palette.Update(msg)
+			if !m.palette.Opened() {
+				m.paletteOpen = false
+			}
+			return m, cmd
 		}
 		if m.finderOpen {
 			if msg.String() == "ctrl+q" {
@@ -315,7 +354,7 @@ func (m *Model) openPath(path string) tea.Cmd {
 func (m *Model) handleGlobal(msg tea.KeyMsg) (bool, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
-		if m.focused == ui.PaneTerminal {
+		if m.focused == ui.PaneTerminal || m.focused == ui.PaneTerminal2 {
 			return false, nil
 		}
 		return true, m.requestQuit()
@@ -345,6 +384,11 @@ func (m *Model) handleGlobal(msg tea.KeyMsg) (bool, tea.Cmd) {
 		w, h := m.finderBox()
 		m.finder.Update(ui.PaneSizeMsg{Width: w, Height: h})
 		return true, m.finder.Open()
+	case "ctrl+k":
+		return true, m.openPalette()
+	case "alt+z":
+		m.zoomed = !m.zoomed
+		return true, m.resizePanes()
 	case "ctrl+f":
 		m.focusPane(ui.PaneViewer)
 		if m.viewer.Editing() {
@@ -414,14 +458,11 @@ func (m *Model) routeToPane(msg tea.Msg) tea.Cmd {
 	case gitpane.LoadedMsg:
 		_, cmd := m.changes.Update(msg)
 		return cmd
-	case buildpane.RunStartedMsg, buildpane.RunEventMsg:
-		_, cmd := m.build.Update(msg)
-		return cmd
 	case console.ShellStartedMsg, console.ShellOutputMsg,
 		console.ShellExitedMsg:
-		target := m.console
-		if m.agentRunning && m.agentConsole != nil {
-			target = m.agentConsole
+		target := m.consoleFor(msg)
+		if target == nil {
+			return nil
 		}
 		_, cmd := target.Update(msg)
 		if _, started := msg.(console.ShellStartedMsg); started {
@@ -433,9 +474,9 @@ func (m *Model) routeToPane(msg tea.Msg) tea.Cmd {
 		return cmd
 	case console.ShellErrMsg:
 		err := msg.(console.ShellErrMsg)
-		target := m.console
-		if m.agentRunning && m.agentConsole != nil {
-			target = m.agentConsole
+		target := m.consoleFor(err)
+		if target == nil {
+			return nil
 		}
 		_, cmd := target.Update(err)
 		if err.Err != nil {
@@ -446,10 +487,56 @@ func (m *Model) routeToPane(msg tea.Msg) tea.Cmd {
 	return nil
 }
 
+func (m *Model) consoleFor(msg any) *console.Model {
+	var id int
+	switch event := msg.(type) {
+	case console.ShellStartedMsg:
+		id = event.Model
+	case console.ShellOutputMsg:
+		id = event.Model
+	case console.ShellExitedMsg:
+		id = event.Model
+	case console.ShellErrMsg:
+		id = event.Model
+	default:
+		return nil
+	}
+	if m.agentConsole != nil && m.agentConsole.ID() == id {
+		return m.agentConsole
+	}
+	if m.console != nil && m.console.ID() == id {
+		return m.console
+	}
+	if m.console2 != nil && m.console2.ID() == id {
+		return m.console2
+	}
+	return nil
+}
+
+func (m *Model) closeConsoles() {
+	if m.console != nil {
+		m.console.Close()
+	}
+	if m.console2 != nil {
+		m.console2.Close()
+	}
+	if m.agentConsole != nil {
+		m.agentConsole.Close()
+	}
+}
+
 // resizePanes tells every visible pane its rectangle so paging and wrapping
 // have correct dimensions without doing layout work in View.
 func (m *Model) resizePanes() tea.Cmd {
 	if m.width == 0 || m.height == 0 {
+		return nil
+	}
+	if m.zoomed {
+		if p := m.panes[m.focused]; p != nil {
+			if _, cmd := p.Update(ui.PaneSizeMsg{ID: m.focused, Width: m.width, Height: m.height - 1}); cmd != nil {
+				return cmd
+			}
+		}
 		return nil
 	}
 	grid := layout.Solve(m.width, m.height-1, m.layoutState())
@@ -538,6 +625,8 @@ func paneFromString(s string) (ui.PaneID, bool) {
 		return ui.PaneViewer, true
 	case "terminal":
 		return ui.PaneTerminal, true
+	case "terminal 2", "terminal2":
+		return ui.PaneTerminal2, true
 	case "changes":
 		return ui.PaneChanges, true
 	case "agent":
@@ -572,7 +661,7 @@ func (m *Model) requestQuit() tea.Cmd {
 		return nil
 	}
 	m.quitting = true
-	m.console.Close()
+	m.closeConsoles()
 	return tea.Quit
 }
 
@@ -590,6 +679,9 @@ func (m *Model) runInstall(line string) tea.Cmd {
 }
 
 func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
+	if m.showHelp || m.finderOpen || m.paletteOpen {
+		return nil
+	}
 	id, r, ok := m.paneAt(msg.X, msg.Y)
 	if !ok {
 		return nil
@@ -620,6 +712,9 @@ func (m *Model) paneAt(x, y int) (ui.PaneID, layout.Rect, bool) {
 	if m.width == 0 || m.height == 0 {
 		return 0, layout.Rect{}, false
 	}
+	if m.zoomed {
+		return m.focused, layout.Rect{X: 0, Y: 0, W: m.width, H: m.height - 1}, true
+	}
 	grid := layout.Solve(m.width, m.height-1, m.layoutState())
 	for id, r := range grid.Rects {
 		if x >= r.X && x < r.X+r.W && y >= r.Y && y < r.Y+r.H {
@@ -638,6 +733,7 @@ func (m *Model) focusAt(x, y int) {
 func (m *Model) setMessage(text string, isErr bool) {
 	m.message = text
 	m.messageError = isErr
+	m.messageAt = time.Now()
 }
 
 // View implements tea.Model.
@@ -663,8 +759,22 @@ func (m *Model) View() string {
 		x := (m.width - bw) / 2
 		y := (m.height - 1 - bh) / 2
 		content = ui.Overlay(content, m.width, m.height-1, box, x, y)
-		hints = "type filter   ↑↓ select   enter open   esc close"
+		hints = "type filter   up/down select   enter open   esc close"
 		mode = "FIND"
+	}
+	if m.paletteOpen {
+		bw, bh := m.paletteBox()
+		box := m.palette.View(bw, bh)
+		x := (m.width - bw) / 2
+		y := (m.height - 1 - bh) / 2
+		content = ui.Overlay(content, m.width, m.height-1, box, x, y)
+		hints = "type filter   up/down move   enter run   esc close"
+		mode = "COMMAND"
+	}
+	position := ""
+	if m.viewer.Path() != "" {
+		line, col := m.viewer.Cursor()
+		position = "Ln " + strconv.Itoa(line+1) + ":" + strconv.Itoa(col+1)
 	}
 	status := ui.StatusBar(m.width, ui.StatusData{
 		Project:        projectName(m.Dir),
@@ -673,7 +783,9 @@ func (m *Model) View() string {
 		Hints:          hints,
 		Message:        m.message,
 		MessageIsError: m.messageError,
+		Position:       position,
 		Mode:           mode,
+		Zoom:           m.zoomed,
 	})
 	return strings.Join([]string{content, status}, "\n")
 }
@@ -681,6 +793,9 @@ func (m *Model) View() string {
 func (m *Model) modeLabel() string {
 	if m.confirm != "" {
 		return "UNSAVED"
+	}
+	if m.paletteOpen {
+		return "COMMAND"
 	}
 	if m.finderOpen {
 		return "FIND"
@@ -712,6 +827,99 @@ func (m *Model) finderBox() (int, int) {
 	return w, h
 }
 
+func (m *Model) paletteBox() (int, int) {
+	w := clampInt(m.width-16, 44, 84)
+	h := clampInt(m.height-8, 9, 20)
+	if w > m.width-2 {
+		w = m.width - 2
+	}
+	if h > m.height-3 {
+		h = m.height - 3
+	}
+	if w < 16 {
+		w = 16
+	}
+	if h < 5 {
+		h = 5
+	}
+	return w, h
+}
+
+func (m *Model) openPalette() tea.Cmd {
+	m.paletteOpen = true
+	w, h := m.paletteBox()
+	m.palette.Update(ui.PaneSizeMsg{Width: w, Height: h})
+	return m.palette.Open(m.paletteCommands())
+}
+
+func (m *Model) paletteCommands() []palette.Command {
+	return []palette.Command{
+		{ID: "pane.tree", Title: "Focus Tree", Description: "File tree pane", Keys: "alt+1"},
+		{ID: "pane.viewer", Title: "Focus Preview", Description: "Editor and preview pane", Keys: "alt+2"},
+		{ID: "pane.terminal", Title: "Focus Terminal", Description: "Shell tab strip", Keys: "alt+3"},
+		{ID: "pane.changes", Title: "Focus Changes", Description: "Git working tree", Keys: "alt+4"},
+		{ID: "pane.agent", Title: "Focus Agents", Description: "AI agent launcher", Keys: "alt+5"},
+		{ID: "view.toggleTree", Title: "Toggle file tree", Description: "Show or hide the tree column", Keys: "alt+t"},
+		{ID: "view.toggleAgent", Title: "Toggle agent column", Description: "Show or hide the agents pane", Keys: "alt+a"},
+		{ID: "view.zoom", Title: "Toggle pane zoom", Description: "Maximize the focused pane", Keys: "alt+z"},
+		{ID: "file.find", Title: "Find file", Description: "Fuzzy file finder", Keys: "ctrl+p"},
+		{ID: "file.search", Title: "Search in file", Description: "Find text in the open file", Keys: "ctrl+f"},
+		{ID: "file.save", Title: "Save file", Description: "Write editor changes", Keys: "ctrl+s"},
+		{ID: "shell.new", Title: "New shell tab", Description: "Open a fresh terminal tab", Keys: "ctrl+t"},
+		{ID: "app.help", Title: "Keyboard reference", Description: "Show every shortcut", Keys: "?"},
+		{ID: "app.quit", Title: "Quit Bento", Description: "Close the workspace", Keys: "ctrl+q"},
+	}
+}
+
+func (m *Model) runPaletteCommand(id string) tea.Cmd {
+	switch id {
+	case "pane.tree":
+		m.focusPane(ui.PaneTree)
+		return m.resizePanes()
+	case "pane.viewer":
+		m.focusPane(ui.PaneViewer)
+		return m.resizePanes()
+	case "pane.terminal":
+		m.focusPane(ui.PaneTerminal)
+		return m.resizePanes()
+	case "pane.changes":
+		m.focusPane(ui.PaneChanges)
+		return m.resizePanes()
+	case "pane.agent":
+		m.showAgent = true
+		m.ensureFocusVisible()
+		m.focusPane(ui.PaneAgent)
+		return m.resizePanes()
+	case "view.toggleTree":
+		m.toggleTree()
+		return m.resizePanes()
+	case "view.toggleAgent":
+		m.toggleAgent()
+		return m.resizePanes()
+	case "view.zoom":
+		m.zoomed = !m.zoomed
+		return m.resizePanes()
+	case "file.find":
+		_, cmd := m.handleGlobal(tea.KeyMsg{Type: tea.KeyCtrlP})
+		return cmd
+	case "file.search":
+		_, cmd := m.handleGlobal(tea.KeyMsg{Type: tea.KeyCtrlF})
+		return cmd
+	case "file.save":
+		_, cmd := m.handleGlobal(tea.KeyMsg{Type: tea.KeyCtrlS})
+		return cmd
+	case "shell.new":
+		_, cmd := m.handleGlobal(tea.KeyMsg{Type: tea.KeyCtrlT})
+		return cmd
+	case "app.help":
+		m.showHelp = true
+		return m.resizePanes()
+	case "app.quit":
+		return m.requestQuit()
+	}
+	return nil
+}
+
 func clampInt(v, lo, hi int) int {
 	if v < lo {
 		return lo
@@ -727,6 +935,11 @@ func (m *Model) gridView() string {
 	grid := layout.Solve(m.width, contentH, m.layoutState())
 	if grid.TooSmall {
 		return tooSmallView(m.width, contentH)
+	}
+	if m.zoomed {
+		if p := m.panes[m.focused]; p != nil {
+			return p.View(m.width, contentH, true)
+		}
 	}
 
 	items := make([]ui.Placed, 0, len(grid.Rects))
@@ -763,34 +976,64 @@ func (m *Model) gridView() string {
 }
 
 func (m *Model) statusHints() string {
-	var hints []string
+	var hints []ui.KeyHint
 	if p := m.panes[m.focused]; p != nil {
-		for _, h := range p.KeyHints() {
-			hints = append(hints, h.Key+" "+h.Desc)
-		}
+		hints = append(hints, p.KeyHints()...)
 	}
-	hints = append(hints, "tab focus", "? help")
-	return strings.Join(hints, "  ")
+	hints = append(hints, ui.KeyHint{Key: "tab", Desc: "focus"}, ui.KeyHint{Key: "ctrl+k", Desc: "commands"}, ui.KeyHint{Key: "?", Desc: "help"})
+	if m.zoomed {
+		hints = append(hints, ui.KeyHint{Key: "alt+z", Desc: "unzoom"})
+	}
+	return ui.HintLine(hints)
 }
 
 func (m *Model) helpView() string {
+	scopes := make([]string, 0, 3)
+	seen := map[string]bool{}
+	for _, g := range GlobalBindings {
+		if !seen[g.Scope] {
+			seen[g.Scope] = true
+			scopes = append(scopes, g.Scope)
+		}
+	}
+
 	var b strings.Builder
 	b.WriteString(theme.TitleStyle(true).Render("Bento — keyboard reference"))
-	b.WriteString("\n\n")
-	for _, g := range GlobalBindings {
-		keys := strings.Join(g.Keys, " / ")
-		b.WriteString(theme.AccentStyle().Render(padRight(keys, 18)))
-		b.WriteString("  ")
-		b.WriteString(theme.TextStyle().Render(g.Help))
-		b.WriteString("\n")
-	}
 	b.WriteString("\n")
-	b.WriteString(theme.MutedStyle().Render("press esc or ? to close"))
-	body := lipgloss.Place(m.width-2, m.height-3, lipgloss.Center, lipgloss.Center, b.String())
+	b.WriteString(theme.MutedStyle().Render("Every shortcut Bento understands."))
+	for _, scope := range scopes {
+		b.WriteString("\n\n")
+		b.WriteString(theme.GroupHeaderStyle().Render(strings.ToUpper(scope)))
+		for _, g := range GlobalBindings {
+			if g.Scope != scope {
+				continue
+			}
+			keys := strings.Join(g.Keys, " / ")
+			b.WriteString("\n")
+			b.WriteString(" " + theme.KeycapStyle().Render(" "+keys+" "))
+			b.WriteString(strings.Repeat(" ", max(0, 24-lipgloss.Width(keys)-2)))
+			b.WriteString(theme.TextStyle().Render(g.Help))
+		}
+	}
+	b.WriteString("\n\n")
+	b.WriteString(theme.MutedStyle().Render("press "))
+	b.WriteString(theme.KeycapStyle().Render(" esc "))
+	b.WriteString(theme.MutedStyle().Render(" or "))
+	b.WriteString(theme.KeycapStyle().Render(" ? "))
+	b.WriteString(theme.MutedStyle().Render(" to close"))
+
+	blockW := 0
+	for _, line := range strings.Split(b.String(), "\n") {
+		if w := lipgloss.Width(line); w > blockW {
+			blockW = w
+		}
+	}
+	block := lipgloss.NewStyle().Width(blockW).Align(lipgloss.Left).Render(b.String())
+	body := lipgloss.Place(m.width-2, m.height-3, lipgloss.Center, lipgloss.Center, block)
 	panel := ui.Island("Help", m.width, m.height-1, true, body)
 	status := ui.StatusBar(m.width, ui.StatusData{
 		Project: projectName(m.Dir),
-		Hints:   "esc close",
+		Hints:   ui.HintLine([]ui.KeyHint{{Key: "esc", Desc: "close"}}),
 		Mode:    "HELP",
 	})
 	return strings.Join([]string{panel, status}, "\n")

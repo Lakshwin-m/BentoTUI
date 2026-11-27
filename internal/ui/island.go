@@ -29,6 +29,9 @@ func Island(title string, width, height int, focused bool, body string) string {
 	}
 	bs := theme.BorderStyle(focused)
 	ts := theme.TitleStyle(focused)
+	if focused {
+		ts = theme.TitleChipStyle()
+	}
 	b := theme.Border()
 
 	top := bs.Render(b.TopLeft)
@@ -52,8 +55,8 @@ func Island(title string, width, height int, focused bool, body string) string {
 		if i < len(lines) {
 			line = lines[i]
 		}
-		line = padLine(line, inner)
-		out = append(out, bs.Render(b.Left)+line+bs.Render(b.Right))
+		line = PaintBackground(padLine(line, inner), theme.P.Panel)
+		out = append(out, bs.Render(b.Left)+theme.PanelStyle().Render(line)+bs.Render(b.Right))
 	}
 	out = append(out, bs.Render(b.BottomLeft)+bs.Render(strings.Repeat(b.Bottom, inner))+bs.Render(b.BottomRight))
 	return strings.Join(out, "\n")
@@ -74,6 +77,32 @@ func padLine(s string, width int) string {
 
 // Fit truncates and right-pads a string to exactly width cells.
 func Fit(s string, width int) string { return padLine(s, width) }
+
+// PaintBackground re-applies color after every ANSI reset in s. Lip Gloss
+// styles wrap a string but cannot repaint after nested resets, which otherwise
+// leaves trailing padding and inter-segment gaps showing the terminal's default
+// background. Callers use this after fitting a line and before wrapping it.
+func PaintBackground(s string, color lipgloss.Color) string {
+	seq := backgroundSeq(color)
+	if seq == "" {
+		return s
+	}
+	s = seq + s
+	s = strings.ReplaceAll(s, "\x1b[0m", "\x1b[0m"+seq)
+	s = strings.ReplaceAll(s, "\x1b[m", "\x1b[m"+seq)
+	s = strings.ReplaceAll(s, "\n", "\n"+seq)
+	return s + "\x1b[0m"
+}
+
+func backgroundSeq(color lipgloss.Color) string {
+	const probe = "\u2588"
+	rendered := lipgloss.NewStyle().Background(color).Render(probe)
+	i := strings.Index(rendered, probe)
+	if i <= 0 {
+		return ""
+	}
+	return rendered[:i]
+}
 
 // Truncate shortens s to width cells, adding an ellipsis when it was cut.
 func Truncate(s string, width int) string {

@@ -14,13 +14,16 @@ import "github.com/charmbracelet/lipgloss"
 type Palette struct {
 	Background    lipgloss.Color
 	Panel         lipgloss.Color
+	Surface       lipgloss.Color
 	Border        lipgloss.Color
+	BorderSubtle  lipgloss.Color
 	BorderFocused lipgloss.Color
 	Title         lipgloss.Color
 	TitleFocused  lipgloss.Color
 	Text          lipgloss.Color
 	TextMuted     lipgloss.Color
 	Accent        lipgloss.Color
+	AccentAlt     lipgloss.Color
 	Added         lipgloss.Color
 	Removed       lipgloss.Color
 	Modified      lipgloss.Color
@@ -42,36 +45,41 @@ type Palette struct {
 	Warning       lipgloss.Color
 }
 
-// Dark is the default (and currently only) palette.
+// Dark is Bento's default "Harbor" palette: deep blue-black surfaces, a teal
+// accent, and warm amber highlights. Roles are shared by pane chrome, git
+// state, search matches, and Chroma syntax highlighting.
 var Dark = Palette{
-	Background:    lipgloss.Color("#0f1115"),
-	Panel:         lipgloss.Color("#151922"),
-	Border:        lipgloss.Color("#2a2f3a"),
-	BorderFocused: lipgloss.Color("#7aa2f7"),
-	Title:         lipgloss.Color("#7f8ca6"),
-	TitleFocused:  lipgloss.Color("#c0caf5"),
-	Text:          lipgloss.Color("#c0caf5"),
-	TextMuted:     lipgloss.Color("#565f89"),
-	Accent:        lipgloss.Color("#7aa2f7"),
-	Added:         lipgloss.Color("#9ece6a"),
-	Removed:       lipgloss.Color("#f7768e"),
-	Modified:      lipgloss.Color("#e0af68"),
-	Untracked:     lipgloss.Color("#7dcfff"),
-	Conflicted:    lipgloss.Color("#bb9af7"),
-	Selection:     lipgloss.Color("#283457"),
-	Match:         lipgloss.Color("#3b4261"),
-	MatchCurrent:  lipgloss.Color("#e0af68"),
-	Gutter:        lipgloss.Color("#565f89"),
-	CurrentLine:   lipgloss.Color("#1b1f2a"),
-	StatusBarBg:   lipgloss.Color("#1b1f2a"),
-	StatusBarFg:   lipgloss.Color("#c0caf5"),
-	ModeBg:        lipgloss.Color("#7aa2f7"),
-	ModeFg:        lipgloss.Color("#0f1115"),
-	OverlayBg:     lipgloss.Color("#151922"),
-	OverlayBorder: lipgloss.Color("#7aa2f7"),
-	Error:         lipgloss.Color("#f7768e"),
-	Success:       lipgloss.Color("#9ece6a"),
-	Warning:       lipgloss.Color("#e0af68"),
+	Background:    lipgloss.Color("#0B0E14"),
+	Panel:         lipgloss.Color("#121722"),
+	Surface:       lipgloss.Color("#1C2433"),
+	Border:        lipgloss.Color("#33405A"),
+	BorderSubtle:  lipgloss.Color("#1E2738"),
+	BorderFocused: lipgloss.Color("#5EEAD4"),
+	Title:         lipgloss.Color("#8494AD"),
+	TitleFocused:  lipgloss.Color("#E6EDF7"),
+	Text:          lipgloss.Color("#D6DEEB"),
+	TextMuted:     lipgloss.Color("#7C8AA5"),
+	Accent:        lipgloss.Color("#5EEAD4"),
+	AccentAlt:     lipgloss.Color("#F0B072"),
+	Added:         lipgloss.Color("#7FD88F"),
+	Removed:       lipgloss.Color("#F07178"),
+	Modified:      lipgloss.Color("#E6C07B"),
+	Untracked:     lipgloss.Color("#56B6C2"),
+	Conflicted:    lipgloss.Color("#C792EA"),
+	Selection:     lipgloss.Color("#223247"),
+	Match:         lipgloss.Color("#33475E"),
+	MatchCurrent:  lipgloss.Color("#F0B072"),
+	Gutter:        lipgloss.Color("#5A6779"),
+	CurrentLine:   lipgloss.Color("#182130"),
+	StatusBarBg:   lipgloss.Color("#121722"),
+	StatusBarFg:   lipgloss.Color("#D6DEEB"),
+	ModeBg:        lipgloss.Color("#5EEAD4"),
+	ModeFg:        lipgloss.Color("#0B0E14"),
+	OverlayBg:     lipgloss.Color("#182130"),
+	OverlayBorder: lipgloss.Color("#5EEAD4"),
+	Error:         lipgloss.Color("#F07178"),
+	Success:       lipgloss.Color("#7FD88F"),
+	Warning:       lipgloss.Color("#F0B072"),
 }
 
 // P is the active palette. Restyling should only require changing this value.
@@ -82,20 +90,124 @@ func Border() lipgloss.Border { return lipgloss.RoundedBorder() }
 
 // BorderStyle returns the style applied to border glyphs.
 func BorderStyle(focused bool) lipgloss.Style {
-	c := P.Border
+	c := P.BorderSubtle
 	if focused {
 		c = P.BorderFocused
 	}
-	return lipgloss.NewStyle().Foreground(c)
+	return lipgloss.NewStyle().Foreground(c).Background(P.Background)
 }
 
 // TitleStyle returns the style for a pane title.
 func TitleStyle(focused bool) lipgloss.Style {
-	s := lipgloss.NewStyle().Foreground(P.Title)
+	s := lipgloss.NewStyle().Foreground(P.Title).Background(P.Background)
 	if focused {
-		s = s.Foreground(P.TitleFocused).Bold(true)
+		s = s.Foreground(P.Accent).Bold(true)
 	}
 	return s
+}
+
+// TitleChipStyle renders the focused pane title as a filled accent chip.
+func TitleChipStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(P.Accent).Foreground(P.Background).Bold(true)
+}
+
+// BrandStyle renders the Bento wordmark.
+func BrandStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(P.StatusBarBg).Foreground(P.Accent).Bold(true)
+}
+
+// BrandAltStyle renders the second half of the Bento wordmark.
+func BrandAltStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(P.StatusBarBg).Foreground(P.AccentAlt).Bold(true)
+}
+
+// HintKeyStyle renders a keycap in the status bar.
+func HintKeyStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(P.Surface).Foreground(P.Accent).Bold(true)
+}
+
+// HintDescStyle dims the description next to a keycap.
+func HintDescStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(P.StatusBarBg).Foreground(P.TextMuted)
+}
+
+// StatusTextStyle is body text on the status bar surface.
+func StatusTextStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(P.StatusBarBg).Foreground(P.Text)
+}
+
+// StatusMutedStyle is secondary text on the status bar surface.
+func StatusMutedStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(P.StatusBarBg).Foreground(P.TextMuted)
+}
+
+// StatusAccentStyle is emphasized text on the status bar surface.
+func StatusAccentStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(P.StatusBarBg).Foreground(P.Accent)
+}
+
+// StatusAltStyle is the secondary accent on the status bar surface.
+func StatusAltStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(P.StatusBarBg).Foreground(P.AccentAlt)
+}
+
+// StatusErrorStyle is error text on the status bar surface.
+func StatusErrorStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(P.StatusBarBg).Foreground(P.Error).Bold(true)
+}
+
+// StatusSuccessStyle is success text on the status bar surface.
+func StatusSuccessStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(P.StatusBarBg).Foreground(P.Success).Bold(true)
+}
+
+// StatusWarningStyle is warning text on the status bar surface.
+func StatusWarningStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(P.StatusBarBg).Foreground(P.Warning).Bold(true)
+}
+
+// CardStyle frames an empty-state card inside a pane.
+func CardStyle() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Background(P.Panel).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(P.Border).
+		Padding(1, 2)
+}
+
+// GroupHeaderStyle renders a section heading in the help overlay.
+func GroupHeaderStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(P.Panel).Foreground(P.AccentAlt).Bold(true)
+}
+
+// KeycapStyle renders a keyboard key in overlays.
+func KeycapStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(P.Surface).Foreground(P.Accent).Bold(true)
+}
+
+// VersionStyle renders a small version badge.
+func VersionStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(P.Surface).Foreground(P.AccentAlt).Bold(true)
+}
+
+// RuleStyle renders a horizontal divider line.
+func RuleStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(P.Panel).Foreground(P.Border)
+}
+
+// InputStyle renders an overlay's search input on a raised surface.
+func InputStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(P.Surface).Foreground(P.Text)
+}
+
+// InputAccentStyle is the prompt glyph on an input surface.
+func InputAccentStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(P.Surface).Foreground(P.Accent).Bold(true)
+}
+
+// InputMutedStyle is secondary text on an input surface.
+func InputMutedStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(P.Surface).Foreground(P.TextMuted)
 }
 
 // PanelStyle is the base background style for pane content.
@@ -105,47 +217,67 @@ func PanelStyle() lipgloss.Style {
 
 // TextStyle is the default body text style.
 func TextStyle() lipgloss.Style {
-	return lipgloss.NewStyle().Foreground(P.Text)
+	return lipgloss.NewStyle().Background(P.Panel).Foreground(P.Text)
 }
 
 // MutedStyle dims secondary text.
 func MutedStyle() lipgloss.Style {
-	return lipgloss.NewStyle().Foreground(P.TextMuted)
+	return lipgloss.NewStyle().Background(P.Panel).Foreground(P.TextMuted)
 }
 
 // AccentStyle highlights active elements.
 func AccentStyle() lipgloss.Style {
-	return lipgloss.NewStyle().Foreground(P.Accent)
+	return lipgloss.NewStyle().Background(P.Panel).Foreground(P.Accent)
+}
+
+// KeyStyle renders keyboard keys in status hints and palette rows.
+func KeyStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(P.Panel).Foreground(P.Accent).Bold(true)
+}
+
+// CardTitleStyle is used for centered empty states inside pane surfaces.
+func CardTitleStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(P.Panel).Foreground(P.Accent).Bold(true)
+}
+
+// TabActiveStyle renders the selected pane or shell tab.
+func TabActiveStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(P.Accent).Foreground(P.Background).Bold(true)
+}
+
+// TabInactiveStyle renders an available but unfocused tab.
+func TabInactiveStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(P.TextMuted)
+}
+
+// TabDividerStyle renders the quiet separator between tabs.
+func TabDividerStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(P.Border)
 }
 
 // ErrorStyle renders errors.
 func ErrorStyle() lipgloss.Style {
-	return lipgloss.NewStyle().Foreground(P.Error)
+	return lipgloss.NewStyle().Background(P.Panel).Foreground(P.Error)
 }
 
 // SuccessStyle renders success states.
 func SuccessStyle() lipgloss.Style {
-	return lipgloss.NewStyle().Foreground(P.Success)
+	return lipgloss.NewStyle().Background(P.Panel).Foreground(P.Success)
 }
 
 // WarningStyle renders warnings.
 func WarningStyle() lipgloss.Style {
-	return lipgloss.NewStyle().Foreground(P.Warning)
+	return lipgloss.NewStyle().Background(P.Panel).Foreground(P.Warning)
 }
 
 // StatusBarStyle is the background style for the bottom status bar.
 func StatusBarStyle() lipgloss.Style {
-	return lipgloss.NewStyle().
-		Background(P.StatusBarBg).
-		Foreground(P.StatusBarFg)
+	return lipgloss.NewStyle().Background(P.StatusBarBg).Foreground(P.StatusBarFg)
 }
 
 // ModeStyle renders the mode indicator chip.
 func ModeStyle() lipgloss.Style {
-	return lipgloss.NewStyle().
-		Background(P.ModeBg).
-		Foreground(P.ModeFg).
-		Bold(true)
+	return lipgloss.NewStyle().Background(P.Accent).Foreground(P.Background).Bold(true)
 }
 
 // OverlayStyle is the frame for centered overlays.
@@ -158,7 +290,22 @@ func OverlayStyle() lipgloss.Style {
 
 // SelectedStyle is the background used for the focused row or selection.
 func SelectedStyle() lipgloss.Style {
-	return lipgloss.NewStyle().Background(P.Selection).Foreground(P.Text).Bold(true)
+	return lipgloss.NewStyle().Background(P.Selection).Foreground(P.TitleFocused).Bold(true)
+}
+
+// SelectedAccentStyle is the selected-row style for the active marker and title.
+func SelectedAccentStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(P.Selection).Foreground(P.Accent).Bold(true)
+}
+
+// SelectedMutedStyle is the selected-row style for secondary detail text.
+func SelectedMutedStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(P.Selection).Foreground(P.Title)
+}
+
+// CanvasStyle gives the unused gutter cells a tinted, glass-like surface.
+func CanvasStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(P.Background).Foreground(P.Text)
 }
 
 // CursorStyle renders the editor's insertion cursor cell.
@@ -168,7 +315,7 @@ func CursorStyle() lipgloss.Style {
 
 // GitStatusStyle renders a git status letter.
 func GitStatusStyle(letter byte) lipgloss.Style {
-	return lipgloss.NewStyle().Foreground(GitStatusColor(letter))
+	return lipgloss.NewStyle().Background(P.Panel).Foreground(GitStatusColor(letter))
 }
 
 // GitStatusColor maps a git status letter to its color role.

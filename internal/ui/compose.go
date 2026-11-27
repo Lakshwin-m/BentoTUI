@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/lakshwin/bento/internal/theme"
 )
 
 // Placed is a rendered pane region to composite onto the canvas.
@@ -53,7 +55,7 @@ func Compose(width, height int, items []Placed) string {
 		if cursor < width {
 			b.WriteString(strings.Repeat(" ", width-cursor))
 		}
-		rows[y] = Fit(b.String(), width)
+		rows[y] = PaintBackground(Fit(b.String(), width), theme.P.Background)
 	}
 	return strings.Join(rows, "\n")
 }

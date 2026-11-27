@@ -6,6 +6,9 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
+
+	"github.com/lakshwin/bento/internal/theme"
 )
 
 func TestComposeBasic(t *testing.T) {
@@ -33,6 +36,29 @@ func TestComposeBasic(t *testing.T) {
 		if len(runes) > 10 && runes[10] != ' ' {
 			t.Errorf("gutter column not blank: %q", line)
 		}
+	}
+}
+
+func TestComposePaintsGutterBackground(t *testing.T) {
+	old := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(old)
+
+	a := Island("A", 10, 4, false, "")
+	b := Island("B", 10, 4, false, "")
+	out := Compose(21, 4, []Placed{
+		{X: 0, Y: 0, View: a},
+		{X: 11, Y: 0, View: b},
+	})
+	seq := backgroundSeq(theme.P.Background)
+	if seq == "" {
+		t.Fatal("expected a background sequence in truecolor")
+	}
+	if strings.Contains(out, "\x1b[0m ") || strings.Contains(out, "\x1b[m ") {
+		t.Fatalf("gutter falls back to the terminal background: %q", out)
+	}
+	if !strings.Contains(out, "\x1b[0m"+seq+" ") {
+		t.Fatalf("gutter is not painted with the canvas background: %q", out)
 	}
 }
 

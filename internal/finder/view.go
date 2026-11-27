@@ -27,11 +27,11 @@ func (m *Model) View(width, height int) string {
 	default:
 		status = fmt.Sprintf("%d/%d", len(m.results), len(m.files))
 	}
-	input := theme.AccentStyle().Render("> ") + theme.TextStyle().Render(m.input)
+	input := theme.InputAccentStyle().Render(" > ") + theme.InputStyle().Render(m.input)
 	if m.opened {
-		input += theme.AccentStyle().Render(theme.Cursor)
+		input += theme.InputAccentStyle().Render(theme.Cursor)
 	}
-	input += "  " + theme.MutedStyle().Render(status)
+	input += "  " + theme.InputMutedStyle().Render(status)
 
 	listH := innerH - 2
 	if listH < 0 {
@@ -60,9 +60,12 @@ func (m *Model) View(width, height int) string {
 	}
 
 	lines := make([]string, 0, innerH)
-	lines = append(lines, ui.Fit(input, innerW))
+	lines = append(lines, theme.InputStyle().Render(ui.PaintBackground(ui.Fit(input, innerW), theme.P.Surface)))
 	lines = append(lines, rows...)
-	lines = append(lines, theme.MutedStyle().Render(ui.Fit(" enter open   esc cancel", innerW)))
+	lines = append(lines, ui.Fit(ui.HintLine([]ui.KeyHint{
+		{Key: "enter", Desc: "open"},
+		{Key: "esc", Desc: "cancel"},
+	}), innerW))
 	for len(lines) < innerH {
 		lines = append(lines, ui.Fit("", innerW))
 	}

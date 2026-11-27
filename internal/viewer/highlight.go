@@ -73,7 +73,7 @@ func chromaStyle() *chroma.Style {
 func hex(c lipgloss.Color) string { return string(c) }
 
 func tokenStyle(e chroma.StyleEntry) lipgloss.Style {
-	s := lipgloss.NewStyle()
+	s := lipgloss.NewStyle().Background(theme.P.Panel)
 	if e.Colour.IsSet() {
 		s = s.Foreground(lipgloss.Color(e.Colour.String()))
 	}

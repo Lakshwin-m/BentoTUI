@@ -12,9 +12,9 @@ const (
 	PaneTree PaneID = iota
 	PaneViewer
 	PaneTerminal
+	PaneTerminal2
 	PaneChanges
 	PaneAgent
-	PaneBuild
 
 	// PaneCount is the number of addressable panes.
 	PaneCount
@@ -29,12 +29,12 @@ func (p PaneID) String() string {
 		return "Viewer"
 	case PaneTerminal:
 		return "Terminal"
+	case PaneTerminal2:
+		return "Terminal 2"
 	case PaneChanges:
 		return "Changes"
 	case PaneAgent:
 		return "Agent"
-	case PaneBuild:
-		return "Build"
 	default:
 		return "Unknown"
 	}

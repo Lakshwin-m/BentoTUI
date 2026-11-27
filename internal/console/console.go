@@ -1,6 +1,5 @@
-// Package console is the bottom pane: a tabbed container with a build tab and
-// real ConPTY shell tabs. Shell I/O stays off the UI goroutine; the emulator
-// keeps each tab's screen state.
+// Package console is a real ConPTY shell pane with tab support. Shell I/O stays
+// off the UI goroutine; the emulator keeps each tab's screen state.
 package console
 
 import (
@@ -9,37 +8,47 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"github.com/aymanbagabas/go-pty"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/vt"
 
-	buildpane "github.com/lakshwin/bento/internal/build"
 	"github.com/lakshwin/bento/internal/theme"
 	"github.com/lakshwin/bento/internal/ui"
 	"github.com/lakshwin/bento/internal/winutil"
 )
 
 // ShellStartedMsg announces a ready shell session.
-type ShellStartedMsg struct{ shell *shell }
+type ShellStartedMsg struct {
+	Model int
+	shell *shell
+}
 
 // ShellOutputMsg carries a chunk of terminal output.
 type ShellOutputMsg struct {
-	ID   int
-	Data []byte
+	Model int
+	ID    int
+	Data  []byte
 }
 
 // ShellExitedMsg reports that a shell's output stream closed. Title is kept in
 // the message so the root model can explain an immediate agent exit in the
 // status bar instead of making it look like the launch was ignored.
 type ShellExitedMsg struct {
+	Model int
 	ID    int
 	Title string
 }
 
 // ShellErrMsg reports a failure to start a shell.
-type ShellErrMsg struct{ Err error }
+type ShellErrMsg struct {
+	Model int
+	Err   error
+}
+
+var modelSeq int32
 
 type shell struct {
 	id     int
@@ -51,13 +60,14 @@ type shell struct {
 	exited bool
 }
 
-// Model is the tabbed console pane.
+// Model is a shell console pane.
 type Model struct {
-	dir   string
-	build *buildpane.Model
+	id        int
+	dir       string
+	paneTitle string
 
 	shells []*shell
-	active int // 0 = build, 1..len(shells) = shells
+	active int // 1..len(shells); 0 means no shell yet
 	nextID int
 
 	width  int
@@ -68,8 +78,15 @@ type Model struct {
 
 // New creates the console for a project directory.
 func New(dir string) *Model {
-	return &Model{dir: dir, build: buildpane.New(dir)}
+	return &Model{id: int(atomic.AddInt32(&modelSeq, 1)), dir: dir}
 }
+
+// ID identifies this console in shell messages, letting the root model route
+// output when several consoles are on screen at once.
+func (m *Model) ID() int { return m.id }
+
+// SetTitle overrides the pane and island title. Tabs keep their shell titles.
+func (m *Model) SetTitle(title string) { m.paneTitle = title }
 
 // Init implements ui.Pane. Start the default PowerShell tab immediately so
 // the bottom-center pane is a usable Terminal on first paint.
@@ -85,7 +102,6 @@ func (m *Model) Update(msg tea.Msg) (ui.Pane, tea.Cmd) {
 	switch msg := msg.(type) {
 	case ui.PaneSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		m.build.Update(ui.PaneSizeMsg{Width: msg.Width, Height: max(1, msg.Height-1)})
 		m.resizeShells()
 		return m, nil
 
@@ -98,16 +114,12 @@ func (m *Model) Update(msg tea.Msg) (ui.Pane, tea.Cmd) {
 	case tea.KeyMsg:
 		return m, m.handleKey(msg)
 
-	case buildpane.RunStartedMsg, buildpane.RunEventMsg:
-		_, cmd := m.build.Update(msg)
-		return m, cmd
-
 	case ShellStartedMsg:
 		m.errMsg = ""
 		m.shells = append(m.shells, msg.shell)
 		m.active = len(m.shells)
 		m.resizeShells()
-		return m, readCmd(msg.shell)
+		return m, readCmd(m.id, msg.shell)
 
 	case ShellOutputMsg:
 		s := m.find(msg.ID)
@@ -115,7 +127,7 @@ func (m *Model) Update(msg tea.Msg) (ui.Pane, tea.Cmd) {
 			return m, nil
 		}
 		s.emu.Write(msg.Data)
-		return m, readCmd(s)
+		return m, readCmd(m.id, s)
 
 	case ShellExitedMsg:
 		if s := m.find(msg.ID); s != nil {
@@ -148,9 +160,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		}
 		return nil
 	}
-	if m.active == 0 {
-		_, cmd := m.build.Update(msg)
-		return cmd
+	if m.active < 1 || m.active > len(m.shells) {
+		return nil
 	}
 	s := m.shells[m.active-1]
 	if s.exited {
@@ -163,7 +174,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 }
 
 func (m *Model) activeShellID() int {
-	if m.active == 0 || m.active > len(m.shells) {
+	if m.active < 1 || m.active > len(m.shells) {
 		return -1
 	}
 	return m.shells[m.active-1].id
@@ -179,21 +190,23 @@ func (m *Model) find(id int) *shell {
 }
 
 func (m *Model) cycle(delta int) {
-	n := 1 + len(m.shells)
+	n := len(m.shells)
 	if n <= 1 {
 		return
 	}
-	m.active = (m.active + delta + n) % n
+	m.active = ((m.active-1+delta)%n+n)%n + 1
 }
 
 func (m *Model) closeActiveShell() {
-	if m.active == 0 || m.active > len(m.shells) {
+	if m.active < 1 || m.active > len(m.shells) {
 		return
 	}
 	s := m.shells[m.active-1]
 	closeShell(s)
 	m.shells = append(m.shells[:m.active-1], m.shells[m.active:]...)
-	if m.active > len(m.shells) {
+	if len(m.shells) == 0 {
+		m.active = 0
+	} else if m.active > len(m.shells) {
 		m.active = len(m.shells)
 	}
 }
@@ -210,15 +223,15 @@ func closeShell(s *shell) {
 	}
 }
 
-func readCmd(s *shell) tea.Cmd {
+func readCmd(modelID int, s *shell) tea.Cmd {
 	ch := s.ch
 	id := s.id
 	return func() tea.Msg {
 		data, ok := <-ch
 		if !ok {
-			return ShellExitedMsg{ID: id, Title: s.title}
+			return ShellExitedMsg{Model: modelID, ID: id, Title: s.title}
 		}
-		return ShellOutputMsg{ID: id, Data: data}
+		return ShellOutputMsg{Model: modelID, ID: id, Data: data}
 	}
 }
 
@@ -247,8 +260,8 @@ func (m *Model) resizeShells() {
 }
 
 func (m *Model) clickTab(x int) {
-	n := 1 + len(m.shells)
-	if n <= 0 || m.width <= 0 {
+	n := len(m.shells)
+	if n == 0 || m.width <= 0 {
 		return
 	}
 	cell := m.width / n
@@ -262,7 +275,7 @@ func (m *Model) clickTab(x int) {
 	if idx >= n {
 		idx = n - 1
 	}
-	m.active = idx
+	m.active = idx + 1
 }
 
 // NewShell opens a new ConPTY tab. The root model calls this for ctrl+t.
@@ -273,21 +286,22 @@ func (m *Model) NewShell() tea.Cmd {
 func (m *Model) newShell() tea.Cmd {
 	m.nextID++
 	id := m.nextID
+	modelID := m.id
 	dir := m.dir
 	m.errMsg = ""
 	cols, rows := m.shellSize()
 	return func() tea.Msg {
 		s, err := startShell(id, dir, cols, rows)
 		if err != nil {
-			return ShellErrMsg{Err: err}
+			return ShellErrMsg{Model: modelID, Err: err}
 		}
-		return ShellStartedMsg{shell: s}
+		return ShellStartedMsg{Model: modelID, shell: s}
 	}
 }
 
 func startShell(id int, dir string, cols, rows int) (*shell, error) {
 	name, args := shellCommand()
-	return startSession(id, "Terminal", dir, cols, rows, name, args)
+	return startSession(id, "PowerShell", dir, cols, rows, name, args)
 }
 
 func startSession(id int, title, dir string, cols, rows int, name string, args []string) (*shell, error) {
@@ -361,6 +375,7 @@ func openCodeEnv() []string {
 func (m *Model) StartCommand(title, path string, args ...string) tea.Cmd {
 	m.nextID++
 	id := m.nextID
+	modelID := m.id
 	dir := m.dir
 	cols, rows := m.shellSize()
 	if title == "" {
@@ -371,9 +386,9 @@ func (m *Model) StartCommand(title, path string, args ...string) tea.Cmd {
 	return func() tea.Msg {
 		s, err := startSession(id, title, dir, cols, rows, path, argv)
 		if err != nil {
-			return ShellErrMsg{Err: err}
+			return ShellErrMsg{Model: modelID, Err: err}
 		}
-		return ShellStartedMsg{shell: s}
+		return ShellStartedMsg{Model: modelID, shell: s}
 	}
 }
 
@@ -426,7 +441,7 @@ func (m *Model) View(width, height int, focused bool) string {
 	if width <= 0 || height <= 0 {
 		return ""
 	}
-	labels := []string{"Build"}
+	labels := make([]string, 0, len(m.shells))
 	for _, s := range m.shells {
 		label := s.title
 		if s.exited {
@@ -434,7 +449,16 @@ func (m *Model) View(width, height int, focused bool) string {
 		}
 		labels = append(labels, label)
 	}
-	active := m.active
+	if len(labels) == 0 {
+		labels = append(labels, m.displayTitle())
+	}
+	active := 0
+	if len(m.shells) > 0 {
+		active = m.active - 1
+	}
+	if active < 0 {
+		active = 0
+	}
 	if active >= len(labels) {
 		active = len(labels) - 1
 	}
@@ -444,13 +468,15 @@ func (m *Model) View(width, height int, focused bool) string {
 		return tab
 	}
 	var body string
-	if active == 0 && m.errMsg != "" {
+	switch {
+	case len(m.shells) == 0 && m.errMsg != "":
 		body = ui.Island("Shell failed", width, bodyH, focused,
 			ui.CenteredCard(max(0, width-2), max(0, bodyH-2), "Could not start process", m.errMsg))
-	} else if active == 0 {
-		body = m.build.View(width, bodyH, focused)
-	} else {
-		body = m.shellView(m.shells[active-1], width, bodyH, focused)
+	case len(m.shells) == 0:
+		body = ui.Island(m.displayTitle(), width, bodyH, focused,
+			ui.CenteredCard(max(0, width-2), max(0, bodyH-2), "Starting shell", "The PowerShell session is warming up."))
+	default:
+		body = m.shellView(m.shells[active], width, bodyH, focused)
 	}
 	return tab + "\n" + body
 }
@@ -476,7 +502,18 @@ func (m *Model) shellView(s *shell, width, height int, focused bool) string {
 		pos := s.emu.CursorPosition()
 		overlayCursor(lines, pos.X, pos.Y, innerW)
 	}
-	return ui.Island(s.title, width, height, focused, strings.Join(lines, "\n"))
+	title := m.paneTitle
+	if title == "" {
+		title = s.title
+	}
+	return ui.Island(title, width, height, focused, strings.Join(lines, "\n"))
+}
+
+func (m *Model) displayTitle() string {
+	if m.paneTitle != "" {
+		return m.paneTitle
+	}
+	return "Terminal"
 }
 
 func overlayCursor(lines []string, x, y, width int) {
@@ -494,18 +531,19 @@ func overlayCursor(lines []string, x, y, width int) {
 
 // Title implements ui.Pane.
 func (m *Model) Title() string {
-	if m.active == 0 || m.active > len(m.shells) {
-		return "Build"
+	if m.paneTitle != "" {
+		return m.paneTitle
+	}
+	if m.active < 1 || m.active > len(m.shells) {
+		return "Terminal"
 	}
 	return m.shells[m.active-1].title
 }
 
 // KeyHints implements ui.Pane.
 func (m *Model) KeyHints() []ui.KeyHint {
-	hints := make([]ui.KeyHint, 0, 6)
-	if m.active == 0 {
-		hints = append(hints, m.build.KeyHints()...)
-	} else {
+	hints := make([]ui.KeyHint, 0, 4)
+	if len(m.shells) > 0 {
 		hints = append(hints,
 			ui.KeyHint{Key: "type", Desc: "send keys"},
 			ui.KeyHint{Key: "alt+w", Desc: "close"},

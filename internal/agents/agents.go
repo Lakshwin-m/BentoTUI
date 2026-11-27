@@ -3,6 +3,7 @@
 package agents
 
 import (
+	"fmt"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -188,21 +189,29 @@ func (m *Model) View(width, height int, focused bool) string {
 	}
 	for i := m.scroll; i < end; i++ {
 		a := m.agents[i]
-		label := " " + a.Name + " "
-		if i == m.cursor && focused {
-			lines = append(lines, ui.Fit(theme.SelectedStyle().Render(label), innerW))
-		} else if i == m.cursor {
-			lines = append(lines, ui.Fit(theme.AccentStyle().Render(label), innerW))
-		} else {
-			lines = append(lines, ui.Fit(theme.TextStyle().Render(label), innerW))
+		marker := " "
+		if i == m.cursor {
+			marker = theme.AccentBar
 		}
+		label := " " + marker + " " + a.Name
 		detail := a.Install
 		if a.Installed() {
 			detail = shortPath(a.Path)
 		} else {
 			detail = "not installed  " + a.Install
 		}
-		lines = append(lines, ui.Fit(theme.MutedStyle().Render("   "+detail), innerW))
+		detail = "   " + detail
+		switch {
+		case i == m.cursor && focused:
+			lines = append(lines, theme.SelectedAccentStyle().Render(ui.Fit(label, innerW)))
+			lines = append(lines, theme.SelectedMutedStyle().Render(ui.Fit(detail, innerW)))
+		case i == m.cursor:
+			lines = append(lines, theme.AccentStyle().Render(ui.Fit(label, innerW)))
+			lines = append(lines, theme.MutedStyle().Render(ui.Fit(detail, innerW)))
+		default:
+			lines = append(lines, theme.TextStyle().Render(ui.Fit(label, innerW)))
+			lines = append(lines, theme.MutedStyle().Render(ui.Fit(detail, innerW)))
+		}
 	}
 	for len(lines) < innerH {
 		lines = append(lines, ui.Fit("", innerW))
@@ -214,7 +223,18 @@ func (m *Model) View(width, height int, focused bool) string {
 }
 
 // Title implements ui.Pane.
-func (m *Model) Title() string { return "Agents" }
+func (m *Model) Title() string {
+	if len(m.agents) == 0 {
+		return "Agents"
+	}
+	installed := 0
+	for _, a := range m.agents {
+		if a.Installed() {
+			installed++
+		}
+	}
+	return fmt.Sprintf("Agents %d/%d", installed, len(m.agents))
+}
 
 // KeyHints implements ui.Pane.
 func (m *Model) KeyHints() []ui.KeyHint {

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -57,6 +58,59 @@ func TestHelpOverlayToggles(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if strings.Contains(ansi.Strip(m.View()), "keyboard reference") {
 		t.Fatal("help did not close")
+	}
+}
+
+func TestCommandPaletteOpensAndRuns(t *testing.T) {
+	m := New(`C:\temp\demo`, "test")
+	resize(m, 140, 45)
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlK})
+	plain := ansi.Strip(m.View())
+	if !strings.Contains(plain, "Commands") || !strings.Contains(plain, "COMMAND") {
+		t.Fatalf("palette did not open:\n%s", plain)
+	}
+	for _, r := range "tree" {
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter should return the palette command")
+	}
+	_, _ = m.Update(cmd())
+	if m.paletteOpen {
+		t.Fatal("palette should close after running a command")
+	}
+	if m.Focused() != ui.PaneTree {
+		t.Fatalf("focus = %v, want Tree", m.Focused())
+	}
+}
+
+func TestZoomShowsBadge(t *testing.T) {
+	m := New(`C:\temp\demo`, "test")
+	resize(m, 140, 45)
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'z'}, Alt: true})
+	if !m.zoomed {
+		t.Fatal("alt+z should enable zoom")
+	}
+	if !strings.Contains(ansi.Strip(m.View()), "ZOOM") {
+		t.Fatal("status bar should show the zoom badge")
+	}
+}
+
+func TestInfoToastAutoDismisses(t *testing.T) {
+	m := New(`C:\temp\demo`, "test")
+	resize(m, 100, 30)
+	m.setMessage("Saved demo.go", false)
+	m.messageAt = time.Now().Add(-5 * time.Second)
+	m.Update(toastTickMsg{})
+	if m.message != "" {
+		t.Fatalf("info toast should clear, got %q", m.message)
+	}
+	m.setMessage("Save failed", true)
+	m.messageAt = time.Now().Add(-5 * time.Second)
+	m.Update(toastTickMsg{})
+	if m.message == "" {
+		t.Fatal("error messages should persist")
 	}
 }
 

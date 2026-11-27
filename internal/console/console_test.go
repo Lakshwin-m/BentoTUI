@@ -51,10 +51,10 @@ func TestConsoleTabsAndShellRender(t *testing.T) {
 		t.Fatalf("alt+x changed tabs: %d", m.active)
 	}
 	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{']'}, Alt: true})
-	if m.active != 0 {
+	if m.active != 1 {
 		t.Fatalf("alt+] active = %d", m.active)
 	}
-	if m.Title() != "Build" {
+	if m.Title() != "shell 1" {
 		t.Fatalf("title = %q", m.Title())
 	}
 }

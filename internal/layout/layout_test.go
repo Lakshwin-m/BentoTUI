@@ -48,7 +48,7 @@ func TestWideFull(t *testing.T) {
 		t.Fatalf("mode = %v", g.Mode)
 	}
 	assertRectsValid(t, g, w, h)
-	for _, id := range []ui.PaneID{ui.PaneTree, ui.PaneViewer, ui.PaneTerminal, ui.PaneChanges, ui.PaneAgent} {
+	for _, id := range []ui.PaneID{ui.PaneTree, ui.PaneViewer, ui.PaneTerminal, ui.PaneTerminal2, ui.PaneChanges, ui.PaneAgent} {
 		if _, ok := g.Rects[id]; !ok {
 			t.Errorf("missing rect for %v", id)
 		}
@@ -81,11 +81,11 @@ func TestWideNoTreeNoAgent(t *testing.T) {
 	if g.Rects[ui.PaneViewer].X != 0 {
 		t.Errorf("viewer should start at x=0, got %d", g.Rects[ui.PaneViewer].X)
 	}
-	if r := g.Rects[ui.PaneChanges]; r.H != h {
-		t.Errorf("changes should occupy the full right column when tree is hidden, got %d", r.H)
+	if r := g.Rects[ui.PaneChanges]; r.H >= h {
+		t.Errorf("changes should remain in the top grid when tree is hidden, got %d", r.H)
 	}
-	if got := len(g.Visible); got != 3 {
-		t.Errorf("visible panes = %d, want 3", got)
+	if got := len(g.Visible); got != 4 {
+		t.Errorf("visible panes = %d, want 4", got)
 	}
 }
 
@@ -105,11 +105,14 @@ func TestMedium(t *testing.T) {
 	if _, ok := g.Rects[ui.PaneTerminal]; !ok {
 		t.Error("terminal rect missing")
 	}
+	if _, ok := g.Rects[ui.PaneTerminal2]; !ok {
+		t.Error("second terminal rect missing")
+	}
 }
 
 func TestNarrow(t *testing.T) {
 	const w, h = 80, 20
-	for _, active := range []ui.PaneID{ui.PaneTree, ui.PaneViewer, ui.PaneTerminal, ui.PaneChanges} {
+	for _, active := range []ui.PaneID{ui.PaneTree, ui.PaneViewer, ui.PaneTerminal, ui.PaneTerminal2, ui.PaneChanges} {
 		g := Solve(w, h, State{ShowTree: true, ShowAgent: false, Active: active})
 		if g.Mode != Narrow {
 			t.Fatalf("mode = %v", g.Mode)
@@ -136,7 +139,7 @@ func TestNarrowHiddenActiveFallsBack(t *testing.T) {
 
 func TestVisibleOrder(t *testing.T) {
 	got := VisiblePanes(State{ShowTree: true, ShowAgent: true})
-	want := []ui.PaneID{ui.PaneTree, ui.PaneViewer, ui.PaneTerminal, ui.PaneChanges, ui.PaneAgent}
+	want := []ui.PaneID{ui.PaneTree, ui.PaneViewer, ui.PaneTerminal, ui.PaneTerminal2, ui.PaneChanges, ui.PaneAgent}
 	if len(got) != len(want) {
 		t.Fatalf("visible = %v", got)
 	}

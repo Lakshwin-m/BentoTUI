@@ -22,6 +22,12 @@ One-time install to your user PATH:
 
 Then `bento [dir]` works from any new Windows Terminal tab.
 
+## Project picker
+
+On launch, Bento shows recent projects. Use `↑`/`↓` and `enter`, or press
+`1`–`9` to open a recent project directly. `o` opens a folder, `c` clones a
+repository, and `q` quits.
+
 ## Keys
 
 | Key | Action |
@@ -30,6 +36,8 @@ Then `bento [dir]` works from any new Windows Terminal tab.
 | `alt+1..5` | jump to Tree, Preview, Build, Changes, Agent |
 | `alt+t` / `alt+a` | toggle tree / agent columns |
 | `ctrl+p` | fuzzy file finder |
+| `ctrl+k` | command palette |
+| `alt+z` | zoom the focused pane |
 | `ctrl+f` | search in the open file |
 | `ctrl+s` | save |
 | `ctrl+a` | focus agent launcher |
